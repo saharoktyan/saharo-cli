@@ -1,3 +1,3 @@
 # Saharo
 
-### check roadmap to see current state
+### check roadmap to see current status
