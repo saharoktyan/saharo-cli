@@ -25,7 +25,7 @@ from ..license_resolver import (
 )
 from ..registry_store import load_registry
 from ..ssh import SshTarget, SSHSession, build_control_path, _ensure_sudo_mode, _sudo_prefix, is_windows
-from .host_bootstrap import DEFAULT_REGISTRY, normalize_registry_host
+from .host_bootstrap import DEFAULT_REGISTRY
 
 app = typer.Typer(help="Agents commands.")
 
@@ -49,36 +49,6 @@ def _resolve_entitlements_from_license(
     except LicenseEntitlementsError as exc:
         console.err(str(exc))
         raise typer.Exit(code=2)
-
-
-def _resolve_agent_version_from_host_api(cfg: AppConfig) -> tuple[str, str | None] | None:
-    client = make_client(cfg, profile=None, base_url_override=None)
-    try:
-        data = client.admin_license_versions()
-    except (ApiError, NetworkError):
-        return None
-    finally:
-        client.close()
-
-    versions = data.get("versions") if isinstance(data, dict) else {}
-    if not isinstance(versions, dict):
-        return None
-
-    resolved_versions = versions.get("resolved_versions")
-    if not isinstance(resolved_versions, dict):
-        resolved_versions = versions
-    agent_tag = resolved_versions.get("agent")
-    if not isinstance(agent_tag, str) or not agent_tag.strip():
-        return None
-
-    registry_url = None
-    registry = versions.get("registry")
-    if isinstance(registry, dict):
-        reg_url = str(registry.get("url") or "").strip()
-        if reg_url:
-            registry_url = normalize_registry_host(reg_url) or None
-
-    return agent_tag.strip(), registry_url
 
 @app.command("list")
 def list_agents(
@@ -425,31 +395,21 @@ def install_agent(
     if version:
         resolved_tag = version
     elif not no_license:
-        host_result = _resolve_agent_version_from_host_api(cfg)
-        if host_result:
-            resolved_tag, registry_override = host_result
-            if registry_override:
-                registry = registry_override
-            console.ok(f"Resolved agent version from host license cache: {resolved_tag}")
-        else:
-            lic_url = resolve_license_api_url(cfg) or lic_url
-            registry_creds = load_registry()
-            license_key = registry_creds.license_key if registry_creds else None
-            if not license_key:
-                console.err(
-                    "License key not found. Re-run `saharo host bootstrap --license-key <key>` "
-                    "or pass --no-license."
-                )
-                raise typer.Exit(code=2)
-            entitlements = _resolve_entitlements_from_license(lic_url, license_key)
-            resolved_tag = entitlements.agent
-            if registry_creds and registry_creds.url:
-                registry = registry_creds.url
-            console.ok(
-                "Resolved versions from license entitlements: "
-                f"host={entitlements.host} agent={entitlements.agent} cli={entitlements.cli} "
-                f"(allowed major={entitlements.allowed_major if entitlements.allowed_major is not None else 'unknown'})"
-            )
+        lic_url = resolve_license_api_url(cfg) or lic_url
+        registry_creds = load_registry()
+        license_key = registry_creds.license_key if registry_creds else None
+        if not license_key:
+            console.err("License key not found. Run `saharo auth activate` or pass --no-license.")
+            raise typer.Exit(code=2)
+        entitlements = _resolve_entitlements_from_license(lic_url, license_key)
+        resolved_tag = entitlements.agent
+        if registry_creds and registry_creds.url:
+            registry = registry_creds.url
+        console.ok(
+            "Resolved versions from license entitlements: "
+            f"host={entitlements.host} agent={entitlements.agent} cli={entitlements.cli} "
+            f"(allowed major={entitlements.allowed_major if entitlements.allowed_major is not None else 'unknown'})"
+        )
     else:
         resolved_tag = tag
 

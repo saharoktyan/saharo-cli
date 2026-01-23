@@ -14,7 +14,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Iterator
-import posixpath
 
 import httpx
 import typer
@@ -29,7 +28,6 @@ from ..license_resolver import (
     resolve_entitlements,
 )
 from ..ssh import SSHSession, SshTarget, build_control_path, is_windows
-from ..path_utils import looks_like_windows_path
 from .host_https import (
     HttpsSetupError,
     ensure_https,
@@ -58,7 +56,6 @@ DEFAULT_HEALTH_LOG_TAIL = 60
 DEFAULT_API_CONTAINER = "saharo_host_api"
 _TRANSIENT_CURL_EXIT_CODES = {7, 28, 52, 56}
 _LICENSE_STATE_RELATIVE_PATH = Path("state") / "license.json"
-_LICENSE_STATE_RELATIVE_POSIX = posixpath.join("state", "license.json")
 
 _LAST_PULL_STDERR: str | None = None
 
@@ -185,31 +182,6 @@ class BootstrapInputs:
     def host_dir(self) -> Path:
         return Path(self.install_dir).expanduser().resolve() / "host"
 
-    # Remote paths must stay POSIX to avoid Windows drive letters in SSH commands.
-    @property
-    def host_dir_posix(self) -> str:
-        return posixpath.join(self.install_dir, "host")
-
-    @property
-    def compose_path_posix(self) -> str:
-        return posixpath.join(self.host_dir_posix, "docker-compose.yml")
-
-    @property
-    def env_path_posix(self) -> str:
-        return posixpath.join(self.host_dir_posix, ".env")
-
-    @property
-    def readme_path_posix(self) -> str:
-        return posixpath.join(self.host_dir_posix, "README.txt")
-
-    @property
-    def data_dir_posix(self) -> str:
-        return posixpath.join(self.host_dir_posix, "data", "postgres")
-
-    @property
-    def license_state_path_posix(self) -> str:
-        return posixpath.join(self.host_dir_posix, _LICENSE_STATE_RELATIVE_POSIX)
-
     @property
     def compose_path(self) -> Path:
         return self.host_dir / "docker-compose.yml"
@@ -320,16 +292,6 @@ def _print_entitlement_versions(entitlements: LicenseEntitlements) -> None:
     )
 
 
-def _normalize_remote_install_dir(install_dir: str) -> str:
-    clean = (install_dir or "").strip()
-    if not clean:
-        return DEFAULT_INSTALL_DIR
-    if looks_like_windows_path(clean):
-        console.err("In SSH mode, --install-dir must be a Linux path like /opt/saharo.")
-        raise typer.Exit(code=2)
-    return clean
-
-
 def host_bootstrap(
     api_url: str | None = typer.Option(None, "--api-url", help="Public base URL for users/clients."),
     x_root_secret: str | None = typer.Option(None, "--x-root-secret", help="Root secret for /admin/bootstrap."),
@@ -396,16 +358,12 @@ def host_bootstrap(
         console.err("Local host bootstrap is not supported on Windows. Use --ssh-host to connect to a Linux host.")
         raise typer.Exit(code=2)
 
-    if ssh_host:
-        install_dir = _normalize_remote_install_dir(install_dir)
-
     if wipe_data:
         _ensure_wipe_confirmed(
             install_dir=install_dir,
             non_interactive=non_interactive,
             assume_yes=assume_yes,
             confirm_wipe=confirm_wipe,
-            remote=bool(ssh_host),
         )
 
     if not no_license and lic_url and not license_key:
@@ -472,7 +430,7 @@ def host_bootstrap(
         if activation.registry_password is None:
             console.err(
                 "Registry password not returned (credentials not rotated). Re-run "
-                "`saharo host bootstrap --license-key <key>` or rebind the license with rotation enabled, then retry."
+                "`saharo auth activate --login` or re-activate with rotate enabled, then retry."
             )
             raise typer.Exit(code=2)
         registry = activation.registry_url or registry
@@ -572,8 +530,6 @@ def _host_bootstrap_ssh(
     wipe_data: bool,
     skip_https: bool,
 ) -> None:
-    install_dir = _normalize_remote_install_dir(install_dir)
-
     ssh_password = None
     if not ssh_key:
         if is_windows():
@@ -642,7 +598,7 @@ def _host_bootstrap_ssh(
             if activation.registry_password is None:
                 console.err(
                     "Registry password not returned (credentials not rotated). Re-run "
-                    "`saharo host bootstrap --license-key <key>` or rebind the license with rotation enabled, then retry."
+                    "`saharo auth activate --login` or re-activate with rotate enabled, then retry."
                 )
                 raise typer.Exit(code=2)
             registry = activation.registry_url or registry
@@ -939,13 +895,8 @@ def _ensure_remote_sudo(session: SSHSession, target: SshTarget, *, non_interacti
     target.sudo_mode = "password"
 
 
-def _remote_run(session: SSHSession,
-    command: str,
-    *,
-    sudo: bool,
-    cwd: str | None = None,
-) -> subprocess.CompletedProcess:
-    return session.run_privileged(command, cwd=cwd) if sudo else session.run(command, cwd=cwd)
+def _remote_run(session: SSHSession, command: str, *, sudo: bool) -> subprocess.CompletedProcess:
+    return session.run_privileged(command) if sudo else session.run(command)
 
 
 def _remote_run_input(
@@ -1011,7 +962,7 @@ def _remote_install_docker_linux(session: SSHSession, *, sudo: bool) -> None:
 
 def _remote_can_write_install_dir(session: SSHSession, install_dir: str) -> bool:
     clean_dir = install_dir.rstrip("/") or "/"
-    parent_dir = posixpath.dirname(clean_dir) or "/"
+    parent_dir = os.path.dirname(clean_dir) or "/"
     dir_q = shlex.quote(clean_dir)
     parent_q = shlex.quote(parent_dir)
     cmd = f"if [ -d {dir_q} ]; then [ -w {dir_q} ]; else [ -w {parent_q} ]; fi"
@@ -1020,11 +971,11 @@ def _remote_can_write_install_dir(session: SSHSession, install_dir: str) -> bool
 
 
 def _remote_write_files(session: SSHSession, inputs: BootstrapInputs, *, sudo: bool) -> None:
-    host_dir = inputs.host_dir_posix
-    data_dir = inputs.data_dir_posix
-    compose_path = inputs.compose_path_posix
-    env_path = inputs.env_path_posix
-    readme_path = inputs.readme_path_posix
+    host_dir = str(inputs.host_dir)
+    data_dir = str(inputs.data_dir)
+    compose_path = str(inputs.compose_path)
+    env_path = str(inputs.env_path)
+    readme_path = str(inputs.readme_path)
     host_q = shlex.quote(host_dir)
     exists_check = _remote_run(session, f"test -d {host_q}", sudo=sudo)
     if exists_check.returncode == 0 and not inputs.force:
@@ -1096,8 +1047,8 @@ def _remote_write_files(session: SSHSession, inputs: BootstrapInputs, *, sudo: b
 def _remote_backup_host_dir(
     session: SSHSession, inputs: BootstrapInputs, *, sudo: bool
 ) -> str | None:
-    host_dir = inputs.host_dir_posix
-    data_dir = posixpath.join(inputs.host_dir_posix, "data")
+    host_dir = str(inputs.host_dir)
+    data_dir = str(inputs.host_dir / "data")
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     backup_path = f"{host_dir}.bak-{timestamp}"
     script = (
@@ -1133,25 +1084,13 @@ def _remote_run_compose(
     capture_output: bool = False,
     check: bool = True,
 ) -> subprocess.CompletedProcess:
-    compose_path = shlex.quote(inputs.compose_path_posix)
-    env_path = shlex.quote(inputs.env_path_posix)
-    cmd = (
-        f"docker compose --env-file {env_path} -f {compose_path} "
-        + " ".join(shlex.quote(arg) for arg in args)
-    )
-
-    res = _remote_run(
-        session,
-        cmd,
-        sudo=sudo,
-        cwd=inputs.host_dir_posix,
-    )
-
+    compose_path = shlex.quote(str(inputs.compose_path))
+    cmd = f"docker compose -f {compose_path} " + " ".join(shlex.quote(arg) for arg in args)
+    res = _remote_run(session, cmd, sudo=sudo)
     if check and res.returncode != 0:
-        out = ((res.stdout or "") + "\n" + (res.stderr or "")).strip()
-        raise RuntimeError(out or "Remote docker compose command failed.")
+        stderr = (res.stderr or "").strip()
+        raise RuntimeError(stderr or "Remote docker compose command failed.")
     return res
-
 
 
 def _remote_compose_pull_up(session: SSHSession, inputs: BootstrapInputs, *, sudo: bool) -> None:
@@ -1290,10 +1229,6 @@ def _license_state_path(inputs: BootstrapInputs) -> Path:
     return inputs.host_dir / _LICENSE_STATE_RELATIVE_PATH
 
 
-def _license_state_path_posix(inputs: BootstrapInputs) -> str:
-    return posixpath.join(inputs.host_dir_posix, _LICENSE_STATE_RELATIVE_POSIX)
-
-
 def _build_license_state_payload(license_key: str, activation: _RegistryActivation) -> dict[str, object]:
     resolved_versions = activation.resolved_versions or {"host": activation.resolved_host_tag}
     return {
@@ -1332,9 +1267,9 @@ def _write_license_state_remote(
     license_key: str,
     activation: _RegistryActivation,
 ) -> None:
-    path = _license_state_path_posix(inputs)
+    path = _license_state_path(inputs)
     payload = _build_license_state_payload(license_key, activation)
-    state_dir = shlex.quote(posixpath.dirname(path))
+    state_dir = shlex.quote(str(path.parent))
     res = _remote_run(session, f"mkdir -p {state_dir}", sudo=sudo)
     if res.returncode != 0:
         console.err(res.stderr.strip() or "Failed to create license state directory.")
@@ -1345,7 +1280,7 @@ def _write_license_state_remote(
         raise typer.Exit(code=2)
     res = _remote_run_input(
         session,
-        f"cat > {shlex.quote(path)}",
+        f"cat > {shlex.quote(str(path))}",
         json.dumps(payload, indent=2, sort_keys=True),
         log_label="write license state",
         sudo=sudo,
@@ -1353,7 +1288,7 @@ def _write_license_state_remote(
     if res.returncode != 0:
         console.err(res.stderr.strip() or "Failed to write license state file.")
         raise typer.Exit(code=2)
-    res = _remote_run(session, f"chmod 600 {shlex.quote(path)}", sudo=sudo)
+    res = _remote_run(session, f"chmod 600 {shlex.quote(str(path))}", sudo=sudo)
     if res.returncode != 0:
         console.err(res.stderr.strip() or "Failed to set license state permissions.")
         raise typer.Exit(code=2)
@@ -1465,12 +1400,14 @@ def _remote_http_post_json(
 def _print_remote_summary(inputs: BootstrapInputs, *, ssh_host: str, public_api_url: str | None = None) -> None:
     console.rule("[bold]Next steps[/]")
     console.print(f"Remote host: {ssh_host}")
-    console.print(f"Host install dir: {inputs.host_dir_posix}")
+    console.print(f"Host install dir: {inputs.host_dir}")
     console.print(f"Local API address: {inputs.api_base}")
     api_url = public_api_url or inputs.api_url
     console.print(f"Public api-url: {api_url}")
     console.print(f"Login from another machine: saharo auth login --url {api_url} ...")
-    console.print(f"View logs: docker compose -f {inputs.compose_path_posix} logs -f api")
+    console.print(
+        f"View logs: docker compose -f {inputs.compose_path} logs -f api"
+    )
 
 
 def _maybe_setup_https_local(inputs: BootstrapInputs) -> str | None:
@@ -1712,7 +1649,7 @@ def _remote_diagnose_unreachable(
         console.print(stdout or "<empty>")
         console.info("Health check stderr:")
         console.print(stderr or "<empty>")
-    compose_path = shlex.quote(inputs.compose_path_posix)
+    compose_path = shlex.quote(str(inputs.compose_path))
     console.info("Remote container status (docker compose ps):")
     console.print(f"  docker compose -f {compose_path} ps")
     ps_res = _remote_run_compose(session, inputs, ["ps"], sudo=sudo, check=False)
@@ -1746,7 +1683,7 @@ def _remote_diagnose_unreachable(
 def _get_existing_jwt_secret_remote(
     session: SSHSession, install_dir: str, *, sudo: bool
 ) -> str | None:
-    env_path = posixpath.join(install_dir, "host", ".env")
+    env_path = str(Path(install_dir) / "host" / ".env")
     res = _remote_run(session, f"cat {shlex.quote(env_path)}", sudo=sudo)
     if res.returncode != 0:
         return None
@@ -1769,7 +1706,7 @@ def _remote_temporary_root_secret(
 def _remote_ensure_root_secret_env(
     session: SSHSession, inputs: BootstrapInputs, *, sudo: bool
 ) -> bool:
-    env_path = inputs.env_path_posix
+    env_path = str(inputs.env_path)
     res = _remote_run(session, f"cat {shlex.quote(env_path)}", sudo=sudo)
     if res.returncode == 0:
         current = read_env_content(res.stdout or "").get("ROOT_ADMIN_SECRET")
@@ -1865,12 +1802,8 @@ def _ensure_wipe_confirmed(
     non_interactive: bool,
     assume_yes: bool,
     confirm_wipe: bool,
-    remote: bool = False,
 ) -> None:
-    if remote:
-        data_dir = posixpath.join(install_dir, "host", "data", "postgres")
-    else:
-        data_dir = Path(install_dir).expanduser().resolve() / "host" / "data" / "postgres"
+    data_dir = Path(install_dir).expanduser().resolve() / "host" / "data" / "postgres"
     console.warn("DANGEROUS: you are about to delete all host data.")
     console.warn(f"Postgres data directory will be removed: {data_dir}")
     if non_interactive:
@@ -1904,8 +1837,8 @@ def wipe_host_data(inputs: BootstrapInputs) -> None:
 
 
 def _remote_wipe_host_data(session: SSHSession, inputs: BootstrapInputs, *, sudo: bool) -> None:
-    data_dir = inputs.data_dir_posix
-    compose_path = shlex.quote(inputs.compose_path_posix)
+    data_dir = str(inputs.data_dir)
+    compose_path = shlex.quote(str(inputs.compose_path))
     console.warn("Wiping host data on remote (irreversible).")
     console.info(f"Deleting data directory: {data_dir}")
     exists_check = _remote_run(session, f"test -f {compose_path}", sudo=sudo)
@@ -2352,24 +2285,17 @@ def _validate_compose_local(inputs: BootstrapInputs) -> None:
 
 def _validate_compose_remote(session: SSHSession, inputs: BootstrapInputs, *, sudo: bool) -> None:
     console.info("Validating compose file...")
-
-    compose_path = shlex.quote(inputs.compose_path_posix)
-    env_path = shlex.quote(inputs.env_path_posix)
-    host_dir = inputs.host_dir_posix
-
-    cmd = f"docker compose --env-file {env_path} -f {compose_path} config -q"
-    res = _remote_run(session, cmd, sudo=sudo, cwd=host_dir)
-
+    compose_path = shlex.quote(str(inputs.compose_path))
+    cmd = f"docker compose -f {compose_path} config -q"
+    res = _remote_run(session, cmd, sudo=sudo)
     if res.returncode == 0:
         return
-
     console.err("Compose validation failed on remote host. Fix docker-compose.yml and retry.")
     stderr = (res.stderr or "").strip()
     if stderr:
         console.err("Docker/Compose stderr:")
         console.print(stderr)
     raise typer.Exit(code=2)
-
 
 
 def _remote_machine_name(session: SSHSession, *, ssh_host: str) -> str:

@@ -9,8 +9,6 @@ from datetime import datetime, timezone
 import math
 import time
 import os
-import posixpath
-import shlex
 
 
 from saharo_client import ApiError, AuthError, NetworkError
@@ -90,47 +88,10 @@ def _resolve_agent_version_from_host_api(cfg, base_url_override: str | None) -> 
     return agent_tag.strip(), registry_url
 
 
-def _fetch_registry_creds_from_host_api(
-    cfg,
-    base_url_override: str | None,
-) -> tuple[str, str, str] | None:
-    client = make_client(cfg, profile=None, base_url_override=base_url_override)
-    try:
-        snapshot = client.admin_license_snapshot()
-    except (ApiError, AuthError, NetworkError):
-        return None
-    finally:
-        client.close()
-
-    versions = snapshot.get("versions") if isinstance(snapshot, dict) else None
-    if not isinstance(versions, dict):
-        return None
-    registry = versions.get("registry")
-    if not isinstance(registry, dict):
-        return None
-    registry_url = str(registry.get("url") or "").strip()
-    registry_username = str(registry.get("username") or "").strip()
-    registry_password = registry.get("password")
-    if registry_password is not None and not isinstance(registry_password, str):
-        registry_password = None
-    if not registry_url or not registry_username or not registry_password:
-        return None
-    registry_url = normalize_registry_host(registry_url)
-    if not registry_url:
-        return None
-    return registry_url, registry_username, registry_password
-
-
-def _require_registry_activation(cfg, base_url_override: str | None) -> tuple[str, str, str]:
-    host_creds = _fetch_registry_creds_from_host_api(cfg, base_url_override)
-    if host_creds:
-        return host_creds
+def _require_registry_activation() -> tuple[str, str, str]:
     creds = load_registry()
     if not creds or not creds.url or not creds.username or not creds.password:
-        console.err(
-            "Registry credentials missing. Re-run `saharo host bootstrap` with a valid license key, "
-            "or login to the registry on the remote host, or configure registry creds in config.toml."
-        )
+        console.err("Registry credentials missing. Run `saharo auth activate` first.")
         raise typer.Exit(code=2)
     registry_url = normalize_registry_host(creds.url)
     if not registry_url:
@@ -1110,7 +1071,7 @@ def bootstrap(
         if agent_id is None:
             agents_cmd._cleanup_agent_installation_local(allow_existing_state=False, label="bootstrap")
             env_path = f"{compose_dir}/.env"
-            registry_url, registry_username, registry_password = _require_registry_activation(cfg, base_url)
+            registry_url, registry_username, registry_password = _require_registry_activation()
             env_content = (
                 f"AGENT_API_BASE={agent_api_url}\n"
                 f"SAHARO_AGENT_INVITE={invite_token}\n"
@@ -1165,12 +1126,9 @@ def bootstrap(
             sudo_password=sudo_pwd,
             dry_run=dry_run,
         )
-        base_dir = posixpath.join("/opt", "saharo", "agent")
-        compose_path = posixpath.join(base_dir, "docker-compose.yml")
-        env_path = posixpath.join(base_dir, ".env")
-        base_dir_q = shlex.quote(base_dir)
-        compose_path_q = shlex.quote(compose_path)
-        env_path_q = shlex.quote(env_path)
+        base_dir = "/opt/saharo/agent"
+        compose_path = f"{base_dir}/docker-compose.yml"
+        env_path = f"{base_dir}/.env"
         ssh_user = ssh_target.split("@", 1)[0] if "@" in ssh_target else ""
 
         session = agents_cmd.SSHSession(target=target, control_path=agents_cmd.build_control_path(dry_run=dry_run))
@@ -1216,25 +1174,17 @@ def bootstrap(
                         console.err(str(e))
                         raise typer.Exit(code=2)
 
-                res = session.run_privileged(f"mkdir -p {base_dir_q}") if sudo else session.run(f"mkdir -p {base_dir_q}")
+                res = session.run_privileged(f"mkdir -p {base_dir}") if sudo else session.run(f"mkdir -p {base_dir}")
                 if res.returncode != 0:
                     console.err(res.stderr.strip() or "Failed to create remote directory.")
                     raise typer.Exit(code=2)
 
-                registry_url, registry_username, registry_password = _require_registry_activation(cfg, base_url)
+                registry_url, registry_username, registry_password = _require_registry_activation()
                 compose_content = agents_cmd._render_agent_compose(registry, resolved_tag)
                 if sudo:
-                    res = session.run_input_privileged(
-                        f"cat > {compose_path_q}",
-                        compose_content,
-                        log_label="write docker-compose.yml",
-                    )
+                    res = session.run_input_privileged(f"cat > {compose_path}", compose_content, log_label="write docker-compose.yml")
                 else:
-                    res = session.run_input(
-                        f"cat > {compose_path_q}",
-                        compose_content,
-                        log_label="write docker-compose.yml",
-                    )
+                    res = session.run_input(f"cat > {compose_path}", compose_content, log_label="write docker-compose.yml")
                 if res.returncode != 0:
                     console.err(res.stderr.strip() or "Failed to write docker-compose.yml.")
                     raise typer.Exit(code=2)
@@ -1249,13 +1199,13 @@ def bootstrap(
                 if force_reregister:
                     env_content += "SAHARO_AGENT_FORCE_REREGISTER=1\n"
                 if sudo:
-                    res = session.run_input_privileged(f"cat > {env_path_q}", env_content, log_label="write .env")
+                    res = session.run_input_privileged(f"cat > {env_path}", env_content, log_label="write .env")
                 else:
-                    res = session.run_input(f"cat > {env_path_q}", env_content, log_label="write .env")
+                    res = session.run_input(f"cat > {env_path}", env_content, log_label="write .env")
                 if res.returncode != 0:
                     console.err(res.stderr.strip() or "Failed to write .env.")
                     raise typer.Exit(code=2)
-                chmod_cmd = f"chmod 600 {env_path_q}"
+                chmod_cmd = f"chmod 600 {env_path}"
                 res = session.run_privileged(chmod_cmd) if sudo else session.run(chmod_cmd)
                 if res.returncode != 0:
                     console.err(res.stderr.strip() or "Failed to set .env permissions.")
@@ -1294,8 +1244,7 @@ def bootstrap(
                         if retry_pull.returncode != 0:
                             if _is_registry_auth_error(retry_output):
                                 console.err(
-                                    "Remote docker is not authenticated to registry; re-run `saharo host bootstrap` with a valid "
-                                    "license key or login to the registry on the remote host."
+                                    "Remote docker is not authenticated to registry; run saharo auth activate or rerun bootstrap."
                                 )
                             console.err(retry_pull.stderr.strip() or "Failed to pull bootstrap container.")
                             raise typer.Exit(code=2)
@@ -1309,18 +1258,17 @@ def bootstrap(
 
                 compose_check = session.run("docker compose version >/dev/null 2>&1 && echo docker-compose-plugin || echo docker-compose")
                 compose_cmd = "docker compose" if "docker-compose-plugin" in (compose_check.stdout or "") else "docker-compose"
-                pull_cmd = f"cd {base_dir_q} && {compose_cmd} pull"
+                pull_cmd = f"cd {base_dir} && {compose_cmd} pull"
                 res = session.run_privileged(pull_cmd) if sudo else session.run(pull_cmd)
                 if res.returncode != 0:
                     auth_output = f"{res.stdout or ''}\n{res.stderr or ''}"
                     if _is_registry_auth_error(auth_output):
                         console.err(
-                            "Remote docker is not authenticated to registry; re-run `saharo host bootstrap` with a valid "
-                            "license key or login to the registry on the remote host."
+                            "Remote docker is not authenticated to registry; run saharo auth activate or rerun bootstrap."
                         )
                     console.err(res.stderr.strip() or "Failed to pull bootstrap container.")
                     raise typer.Exit(code=2)
-                up_cmd = f"cd {base_dir_q} && {compose_cmd} up -d"
+                up_cmd = f"cd {base_dir} && {compose_cmd} up -d"
                 res = session.run_privileged(up_cmd) if sudo else session.run(up_cmd)
                 if res.returncode != 0:
                     console.err(res.stderr.strip() or "Failed to start bootstrap container.")

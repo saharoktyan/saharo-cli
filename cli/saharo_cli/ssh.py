@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import functools
 import os
 import platform
-import re
 import shlex
 import shutil
 import subprocess
@@ -31,30 +29,13 @@ class SSHSession:
     target: SshTarget
     control_path: str
     _started: bool = field(default=False, init=False, repr=False)
-    _control_master_enabled: bool = field(default=True, init=False, repr=False)
-
-    def __post_init__(self) -> None:
-        self._control_master_enabled = supports_control_master()
 
     def start(self) -> None:
         if self.target.dry_run:
             return
-        if not self._control_master_enabled:
-            cmd = self._ssh_base_cmd(control_master=False) + [self.target.host, "true"]
-            res = subprocess.run(cmd, text=True, capture_output=True)
-            if res.returncode != 0:
-                raise RuntimeError(res.stderr.strip() or "Failed to establish SSH connection")
-            return
         cmd = self._ssh_base_cmd(control_master=True) + [self.target.host, "true"]
         res = subprocess.run(cmd, text=True, capture_output=True)
         if res.returncode != 0:
-            if _is_control_master_unsupported(_decode_stderr(res.stderr or res.stdout)):
-                self._control_master_enabled = False
-                cmd = self._ssh_base_cmd(control_master=False) + [self.target.host, "true"]
-                res = subprocess.run(cmd, text=True, capture_output=True)
-                if res.returncode != 0:
-                    raise RuntimeError(res.stderr.strip() or "Failed to establish SSH connection")
-                return
             raise RuntimeError(res.stderr.strip() or "Failed to establish SSH control connection")
         if not is_windows():
             self._started = True
@@ -76,7 +57,7 @@ class SSHSession:
             console.info(f"[dry-run] ssh {self.target.host}: {remote_cmd}")
             return subprocess.CompletedProcess([], 0, "", "")
         cmd = self._ssh_base_cmd(control_master=False) + [self.target.host, remote_cmd]
-        return subprocess.run(cmd, text=True, capture_output=True, encoding="utf-8", errors="replace")
+        return subprocess.run(cmd, text=True, capture_output=True)
 
     def run_input(
         self,
@@ -102,7 +83,7 @@ class SSHSession:
         cmd = self._ssh_base_cmd(control_master=False) + [self.target.host, sudo_cmd]
         if self.target.sudo_mode == "password":
             return subprocess.run(cmd, text=True, input=f"{self.target.sudo_password}\n", capture_output=True)
-        return subprocess.run(cmd, text=True, capture_output=True, encoding="utf-8", errors="replace")
+        return subprocess.run(cmd, text=True, capture_output=True)
 
     def run_input_privileged(
         self,
@@ -158,7 +139,7 @@ def _decode_stderr(raw: bytes | str | None) -> str:
 
 def _ssh_base_cmd(self, *, control_master: bool) -> list[str]:
     cmd = ["ssh", "-p", str(self.target.port), "-o", "StrictHostKeyChecking=accept-new"]
-    if not is_windows() and self._control_master_enabled:
+    if not is_windows():
         cmd += ["-o", f"ControlPath={self.control_path}"]
         if control_master:
             cmd += ["-o", "ControlMaster=auto", "-o", "ControlPersist=10m"]
@@ -223,43 +204,6 @@ def _base_scp_cmd(target: SshTarget) -> list[str]:
 
 def is_windows() -> bool:
     return os.name == "nt" or platform.system() == "Windows"
-
-
-@functools.lru_cache(maxsize=1)
-def _ssh_version() -> tuple[int, int] | None:
-    try:
-        res = subprocess.run(["ssh", "-V"], text=True, capture_output=True)
-    except FileNotFoundError:
-        return None
-    output = (res.stderr or res.stdout or "").strip()
-    match = re.search(r"OpenSSH_(\d+)\.(\d+)", output)
-    if not match:
-        return None
-    return int(match.group(1)), int(match.group(2))
-
-
-def supports_control_master() -> bool:
-    if is_windows():
-        return False
-    version = _ssh_version()
-    if version is None:
-        return True
-    major, minor = version
-    return (major, minor) >= (4, 0)
-
-
-def _is_control_master_unsupported(stderr: str) -> bool:
-    if not stderr:
-        return False
-    lowered = stderr.lower()
-    return any(
-        token in lowered
-        for token in (
-            "bad configuration option: controlmaster",
-            "bad configuration option: controlpersist",
-            "bad configuration option: controlpath",
-        )
-    )
 
 
 def _sudo_prefix(target: SshTarget) -> str:

@@ -11,9 +11,6 @@ from ..http import make_client
 
 JOBS_USAGE = """\
 Usage:
-  saharo jobs get <id>
-  saharo jobs list [--status STATUS] [--server ID|NAME] [--agent-id ID]
-  saharo jobs create --type <type> [--server ID|NAME | --agent-id ID] [--service NAME | --container NAME]
   saharo jobs clear [--older-than DAYS] [--status finished|failed|claimed|queued] [--dry-run] [--yes]
 """
 
@@ -208,7 +205,8 @@ def list_jobs(
         console.info(f"page={page}/{pages} total={total}")
 
 
-def _get_job(
+@app.command("show")
+def show_job(
     job_id: int = typer.Argument(...),
     base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
     json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
@@ -219,7 +217,7 @@ def _get_job(
         data = client.admin_job_get(job_id)
     except ApiError as e:
         if e.status_code == 404:
-            console.err(f"Job {job_id} not found. Use `saharo jobs get <id>`.")
+            console.err(f"Job {job_id} not found.")
             raise typer.Exit(code=2)
         if e.status_code in (401, 403):
             console.err("Unauthorized. Admin access is required.")
@@ -235,25 +233,6 @@ def _get_job(
 
     for key in sorted(data.keys()):
         console.info(f"{key}: {data.get(key)}")
-
-
-@app.command("get", help="Fetch a job by id.")
-def get_job(
-    job_id: int = typer.Argument(...),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
-    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
-):
-    _get_job(job_id=job_id, base_url=base_url, json_out=json_out)
-
-
-@app.command("show", hidden=True)
-def show_job(
-    job_id: int = typer.Argument(...),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
-    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
-):
-    console.warn("Deprecated: use `saharo jobs get` instead.")
-    _get_job(job_id=job_id, base_url=base_url, json_out=json_out)
 
 
 @app.command("clear", help="Prune old jobs with safety prompts.")
