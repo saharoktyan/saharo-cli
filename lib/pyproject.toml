@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "saharo-client"
+version = "0.1.0"
+description = "Saharo API client SDK (used by CLI and later by bot)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "httpx>=0.27.0",
+]
+
+[tool.setuptools]
+packages = ["saharo_client"]

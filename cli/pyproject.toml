@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "saharo-cli"
+version = "0.1.0"
+description = "Saharo CLI"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "typer>=0.12.3",
+  "rich>=13.7.1",
+  "platformdirs>=4.2.2",
+  "tomli-w>=1.0.0",
+  "saharo-client>=0.1.0",
+  "cryptography>=42.0.0",
+  "httpx>=0.27.0",
+]
+
+[project.scripts]
+saharo = "saharo_cli.main:app"
+
+[tool.setuptools]
+packages = ["saharo_cli", "saharo_cli.commands"]

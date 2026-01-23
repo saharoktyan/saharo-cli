@@ -1,0 +1,25 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Env / secrets (если есть)
+.env
+temp.txt
+
+# OS
+.DS_Store
+.idea/
+
+# Local prod-only deploy overlays
+/deploy/registry/
+
+# build things
+/venv-build
+/dist
+/build
+/saharo.spec
+/cli/build
+/cli/dist/
+

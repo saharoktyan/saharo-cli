@@ -1,0 +1,2 @@
+[console_scripts]
+saharo = saharo_cli.main:app
