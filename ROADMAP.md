@@ -1,4 +1,4 @@
-# Saharo CLI — Roadmap (Pre-Release)
+# Saharo CLI - Roadmap (Pre-Release)
 
 This roadmap tracks the remaining work before the first public release of **Saharo CLI**.
 The repository is public primarily for transparency, review, and future contributions.
@@ -12,8 +12,9 @@ On-Release (v1.0.0 scope):
 - Payment / billing UX
 - Sending license key via email
 - User account on `portal.saharoktyan.ru`
-- Make cli user-friendly installer
+- Make user-friendly cli installer with PATH integration
 - Make cool `readme`
+- Add 
 
 Post-release (Planned):
 - Test CLI on macOS (amd64 / arm64)
@@ -25,10 +26,10 @@ Post-release (Planned):
 
 ## Status Legend
 
-- DONE — implemented and working
-- TODO — planned before release
-- FIX — known issue that must be resolved
-- VERIFY — implemented but requires validation/testing
+- DONE - implemented and working
+- TODO - planned before release
+- FIX - known issue that must be resolved
+- VERIFY - implemented but requires validation/testing
 
 ---
 
@@ -60,7 +61,7 @@ Post-release (Planned):
 
 ## Release Milestones
 
-## M1 — Cross-platform CLI stability
+## M1 - Cross-platform CLI stability
 **Goal:** CLI behaves identically and predictably on Windows and Linux.
 
 ### Tasks
@@ -85,7 +86,7 @@ Post-release (Planned):
 
 ---
 
-## M2 — SSH & bootstrap robustness
+## M2 - SSH & bootstrap robustness
 **Goal:** Bootstrap flows work reliably across supported systems.
 
 ### Tasks
@@ -104,6 +105,10 @@ Post-release (Planned):
 - VERIFY host bootstrap detects:
   - closed ports
   - active firewall rules (iptables / ufw)
+- VERIFY CLI can:
+  - Update itself via installer or cli command
+  - Update host
+  - Create job for agents update
 
 
 ### Acceptance Criteria
@@ -114,7 +119,7 @@ Post-release (Planned):
 
 ---
 
-## M3 — Host API & Agent cross-distro validation
+## M3 - Host API & Agent cross-distro validation
 **Goal:** Confirm stable behavior across supported Linux distributions.
 
 ### Tasks
@@ -135,7 +140,7 @@ Post-release (Planned):
 
 ---
 
-## M4 — License handling consistency (FIX)
+## M4 - License handling consistency (FIX)
 **Goal:** Eliminate incorrect client-side license assumptions.
 
 ### Known Issue
@@ -166,7 +171,7 @@ or configure registry creds in config.toml.
 
 ---
 
-## M5 — End-to-End validation
+## M5 - End-to-End validation
 **Goal:** Confirm full installation flow works without manual intervention.
 
 ### Test Scenarios
@@ -183,7 +188,7 @@ or configure registry creds in config.toml.
 
 ---
 
-## M6 — Documentation (Release-grade)
+## M6 - Documentation (Release-grade)
 **Goal:** A technically literate user can install Saharo without direct support.
 
 ### Tasks
@@ -211,8 +216,6 @@ or configure registry creds in config.toml.
 
 ## Post-Release (Out of Scope)
 
-- Installer with PATH integration
-- Self-updating CLI
 - Web panel
 - Payment UX
 - CI/CD automation
