@@ -1,3 +1,3 @@
 # Saharo
 
-### read roadmap.md
+### check roadmap to see current state
