@@ -36,6 +36,7 @@ def test_windows_password_auth_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_non_windows_ssh_uses_multiplexing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ssh, "is_windows", lambda: False)
+    monkeypatch.setattr(ssh, "supports_control_master", lambda: True)
     target = ssh.SshTarget(host="example", dry_run=True)
     session = ssh.SSHSession(target=target, control_path="/tmp/ctl")
 
