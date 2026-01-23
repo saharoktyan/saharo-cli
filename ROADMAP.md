@@ -126,7 +126,9 @@ Post-release (Planned):
 - TODO Validate host API on:
   - Debian 11
   - Debian 12
+  - Debian 13
   - Ubuntu 22.04 LTS
+  - Ubuntu 24.04 LTS
 - TODO Validate agent runtime on the same distributions
 - TODO Verify Docker + Docker Compose compatibility:
   - compose v2
