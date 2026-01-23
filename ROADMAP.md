@@ -14,7 +14,7 @@ On-Release (v1.0.0 scope):
 - User account on `portal.saharoktyan.ru`
 - Make user-friendly cli installer with PATH integration
 - Make cool `readme`
-- Add 
+- Add download of selecred version via `portal.saharoktyan.ru`
 
 Post-release (Planned):
 - Test CLI on macOS (amd64 / arm64)
