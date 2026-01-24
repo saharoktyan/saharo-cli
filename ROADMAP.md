@@ -54,7 +54,7 @@ Post-release (Planned):
   - Windows 10 / 11 (amd64)
   - Linux (amd64)
 - Host / Agent:
-  - Debian 11+
+  - Debian 12+
   - Ubuntu 22.04 LTS+
 
 ---
@@ -69,7 +69,7 @@ Post-release (Planned):
   - Windows 10 amd64
   - Windows 11 amd64
   - Linux amd64
-- TODO Validate PyInstaller builds:
+- VERIFY Validate PyInstaller builds:
   - no missing modules
   - no hidden-import regressions
   - clean startup (`saharo --help`)
@@ -106,7 +106,7 @@ Post-release (Planned):
   - closed ports
   - active firewall rules (iptables / ufw)
 - VERIFY CLI can:
-  - Update itself via installer or cli command
+  - Be updated via installer or cli command
   - Update host
   - Create job for agents update
 
@@ -124,7 +124,6 @@ Post-release (Planned):
 
 ### Tasks
 - TODO Validate host API on:
-  - Debian 11
   - Debian 12
   - Debian 13
   - Ubuntu 22.04 LTS
@@ -219,5 +218,4 @@ or configure registry creds in config.toml.
 ## Post-Release (Out of Scope)
 
 - Web panel
-- Payment UX
-- CI/CD automation
+- Telegram bot
