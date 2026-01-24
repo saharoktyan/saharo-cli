@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from typer.testing import CliRunner
-
-from saharo_cli.auth_state import AuthContext
 from saharo_cli import main
+from saharo_cli.auth_state import AuthContext
+from typer.testing import CliRunner
 
 
 def test_top_level_whoami_command_available(monkeypatch) -> None:

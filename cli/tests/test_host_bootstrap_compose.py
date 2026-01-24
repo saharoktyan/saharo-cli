@@ -2,7 +2,6 @@ import shutil
 import subprocess
 
 import pytest
-
 from saharo_cli.commands.host_bootstrap import BootstrapInputs, render_compose, render_env
 
 

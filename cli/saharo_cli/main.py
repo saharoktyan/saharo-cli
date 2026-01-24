@@ -3,8 +3,6 @@ from __future__ import annotations
 import typer
 
 from .auth_state import resolve_auth_context
-from .logging_ import setup_logging
-
 from .commands import auth_cmd, config_cmd, invite_cmd, settings_cmd, health_cmd, self_cmd, updates_cmd, portal_cmd
 from .commands.grants_cmd import app as grants_app
 from .commands.health_cmd import app as health_app
@@ -13,6 +11,7 @@ from .commands.jobs_cmd import app as jobs_app
 from .commands.logs_cmd import app as logs_app
 from .commands.servers_cmd import app as servers_app
 from .commands.users_cmd import app as users_app
+from .logging_ import setup_logging
 
 
 def _build_app() -> typer.Typer:
@@ -58,7 +57,7 @@ def _build_app() -> typer.Typer:
 
     @app.callback()
     def _main(
-        verbose: bool = typer.Option(False, "-v", "--verbose", help="Verbose logs."),
+            verbose: bool = typer.Option(False, "-v", "--verbose", help="Verbose logs."),
     ):
         setup_logging(verbose)
 

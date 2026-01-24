@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import typer
+from saharo_client import ApiError
 
 from .. import console
 from ..config import load_config, save_config
 from ..http import make_client
-from saharo_client import ApiError
 
 app_user = typer.Typer(help="Invite commands (user).")
 app_admin = typer.Typer(help="Invite commands (admin).")
@@ -24,15 +24,15 @@ def _default_platform() -> str:
 
 @app_user.command("accept")
 def accept_invite(
-    invite_token: str = typer.Argument(..., help="Invite token."),
-    username: str = typer.Option(..., "--username", prompt=True, help="New username."),
-    password: str | None = typer.Option(None, "--password", help="New password."),
-    device_label: str = typer.Option(
-        None,
-        "--device",
-        help="Device label. Defaults to hostname.",
-    ),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        invite_token: str = typer.Argument(..., help="Invite token."),
+        username: str = typer.Option(..., "--username", prompt=True, help="New username."),
+        password: str | None = typer.Option(None, "--password", help="New password."),
+        device_label: str = typer.Option(
+            None,
+            "--device",
+            help="Device label. Defaults to hostname.",
+        ),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
 ):
     cfg = load_config()
     token = (invite_token or "").strip()
@@ -84,10 +84,10 @@ def accept_invite(
 
 
 def _prompt_password_with_confirmation(
-    initial_password: str | None,
-    *,
-    max_attempts: int = 3,
-    min_length: int = 8,
+        initial_password: str | None,
+        *,
+        max_attempts: int = 3,
+        min_length: int = 8,
 ) -> str:
     attempts = 0
     password = initial_password
@@ -117,13 +117,14 @@ def _prompt_password_with_confirmation(
 
 @app_admin.command("create")
 def create_invite(
-    duration_days: int | None = typer.Option(None, "--duration-days", help="Subscription duration template (days)."),
-    perpetual: bool = typer.Option(False, "--perpetual", help="Perpetual subscription template."),
-    note: str | None = typer.Option(None, "--note", help="Note stored with invite/subscription."),
-    max_uses: int = typer.Option(1, "--max-uses", help="Maximum uses for this invite."),
-    expires_in_days: int | None = typer.Option(30, "--expires-in-days", help="Invite expiry in days."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
-    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+        duration_days: int | None = typer.Option(None, "--duration-days",
+                                                 help="Subscription duration template (days)."),
+        perpetual: bool = typer.Option(False, "--perpetual", help="Perpetual subscription template."),
+        note: str | None = typer.Option(None, "--note", help="Note stored with invite/subscription."),
+        max_uses: int = typer.Option(1, "--max-uses", help="Maximum uses for this invite."),
+        expires_in_days: int | None = typer.Option(30, "--expires-in-days", help="Invite expiry in days."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
     cfg = load_config()
     if not (cfg.auth.token or "").strip():

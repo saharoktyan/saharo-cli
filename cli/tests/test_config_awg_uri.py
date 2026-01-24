@@ -5,7 +5,6 @@ import sys
 import types
 import zlib
 
-
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 fake_client_mod = types.ModuleType("saharo_client")
 fake_client_mod.ApiError = type("ApiError", (), {})

@@ -1,24 +1,24 @@
 from __future__ import annotations
 
 import os
+
 import typer
 
 from .. import console
 from ..config import load_config, save_config, default_config, config_path, normalize_base_url
-
 
 app = typer.Typer(help="Manage local CLI settings (~/.config/saharo/config.toml).")
 
 
 @app.command("init")
 def init_settings(
-    force: bool = typer.Option(False, "--force", help="Overwrite existing config."),
-    base_url: str = typer.Option(
-        ...,
-        "--base-url",
-        prompt="API base URL",
-        help="API base URL like http://127.0.0.1:8010",
-    ),
+        force: bool = typer.Option(False, "--force", help="Overwrite existing config."),
+        base_url: str = typer.Option(
+            ...,
+            "--base-url",
+            prompt="API base URL",
+            help="API base URL like http://127.0.0.1:8010",
+        ),
 ):
     path = config_path()
     if os.path.exists(path) and not force:
@@ -46,7 +46,7 @@ def show_settings():
 
 @app.command("get")
 def get_setting(
-    key: str = typer.Argument(..., help="Setting key (base_url, license_api_url)."),
+        key: str = typer.Argument(..., help="Setting key (base_url, license_api_url)."),
 ):
     cfg = load_config()
     k = key.strip().lower()
@@ -62,8 +62,8 @@ def get_setting(
 
 @app.command("set")
 def set_setting(
-    base_url: str | None = typer.Option(None, "--base-url", help="Set API base URL."),
-    license_api_url: str | None = typer.Option(None, "--license-api-url", help="Set license API URL."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Set API base URL."),
+        license_api_url: str | None = typer.Option(None, "--license-api-url", help="Set license API URL."),
 ):
     cfg = load_config()
     if base_url is not None:

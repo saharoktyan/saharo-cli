@@ -1,14 +1,13 @@
 from __future__ import annotations
 
+import tomllib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-import tomllib
 import tomli_w
 
 from .config import config_path
-
 
 REGISTRY_FILENAME = "registry.toml"
 
@@ -52,10 +51,10 @@ def load_registry() -> RegistryCredentials | None:
 
 
 def save_registry(
-    url: str,
-    username: str,
-    password: str | None,
-    issued_at: str | None = None,
+        url: str,
+        username: str,
+        password: str | None,
+        issued_at: str | None = None,
 ) -> Path:
     path = registry_path()
     path.parent.mkdir(parents=True, exist_ok=True)

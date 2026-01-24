@@ -1,11 +1,10 @@
 from __future__ import annotations
 
+import platform as platform_mod
 from datetime import datetime
 from typing import Any
-import platform as platform_mod
 
 import typer
-
 from saharo_client import ApiError
 
 from .. import console
@@ -111,6 +110,7 @@ def _format_limit(limit: int | None) -> str:
         return "∞"
     return str(limit)
 
+
 def _platform_id() -> str:
     return f"{platform_mod.system().lower()}-{platform_mod.machine().lower()}"
 
@@ -123,7 +123,7 @@ def _format_api_error(exc: ApiError) -> str:
 
 @app.command("check", help="Show CLI update status (users) or full license cache info (admins).")
 def check(
-    base_url: str | None = typer.Option(None, "--base-url", help="Override hub API base URL."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override hub API base URL."),
 ) -> None:
     cfg = load_config()
     base_url_value = (base_url or cfg.base_url or "").strip()

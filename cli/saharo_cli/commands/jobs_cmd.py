@@ -1,16 +1,20 @@
 from __future__ import annotations
 
-import typer
-from rich.table import Table
 import math
 
+import typer
+from rich.table import Table
 from saharo_client import ApiError
+
 from .. import console
 from ..config import load_config
 from ..http import make_client
 
 JOBS_USAGE = """\
 Usage:
+  saharo jobs get <id>
+  saharo jobs list [--status STATUS] [--server ID|NAME] [--agent-id ID]
+  saharo jobs create --type <type> [--server ID|NAME | --agent-id ID] [--service NAME | --container NAME]
   saharo jobs clear [--older-than DAYS] [--status finished|failed|claimed|queued] [--dry-run] [--yes]
 """
 
@@ -39,17 +43,17 @@ def _normalize_job_type(value: str) -> str:
 
 @app.command("create")
 def create_job(
-    job_type: str = typer.Option(
-        ...,
-        "--type",
-        help="Job type: restart-service, start-service, stop-service, restart-container, collect-status.",
-    ),
-    server: str | None = typer.Option(None, "--server", help="Server ID or exact name."),
-    agent_id: int | None = typer.Option(None, "--agent-id", help="Agent ID (if no server)."),
-    service: str | None = typer.Option(None, "--service", help="Service name for *-service jobs."),
-    container: str | None = typer.Option(None, "--container", help="Container name for restart-container."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
-    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+        job_type: str = typer.Option(
+            ...,
+            "--type",
+            help="Job type: restart-service, start-service, stop-service, restart-container, collect-status.",
+        ),
+        server: str | None = typer.Option(None, "--server", help="Server ID or exact name."),
+        agent_id: int | None = typer.Option(None, "--agent-id", help="Agent ID (if no server)."),
+        service: str | None = typer.Option(None, "--service", help="Service name for *-service jobs."),
+        container: str | None = typer.Option(None, "--container", help="Container name for restart-container."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
     def _norm_job_type(s: str) -> str:
         # accept stop_service and stop-service
@@ -129,13 +133,13 @@ def create_job(
 
 @app.command("list")
 def list_jobs(
-    status: str | None = typer.Option(None, "--status", help="Filter by status."),
-    server: str | None = typer.Option(None, "--server", help="Server ID or exact name."),
-    agent_id: int | None = typer.Option(None, "--agent-id", help="Filter by agent ID."),
-    page: int = typer.Option(1, "--page", help="Page number (1-based)."),
-    page_size: int = typer.Option(50, "--page-size", help="Number of jobs per page."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
-    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+        status: str | None = typer.Option(None, "--status", help="Filter by status."),
+        server: str | None = typer.Option(None, "--server", help="Server ID or exact name."),
+        agent_id: int | None = typer.Option(None, "--agent-id", help="Filter by agent ID."),
+        page: int = typer.Option(1, "--page", help="Page number (1-based)."),
+        page_size: int = typer.Option(50, "--page-size", help="Number of jobs per page."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
     if page < 1:
         console.err("--page must be >= 1.")
@@ -205,11 +209,10 @@ def list_jobs(
         console.info(f"page={page}/{pages} total={total}")
 
 
-@app.command("show")
-def show_job(
-    job_id: int = typer.Argument(...),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
-    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+def _get_job(
+        job_id: int = typer.Argument(...),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
     cfg = load_config()
     client = make_client(cfg, profile=None, base_url_override=base_url)
@@ -217,7 +220,7 @@ def show_job(
         data = client.admin_job_get(job_id)
     except ApiError as e:
         if e.status_code == 404:
-            console.err(f"Job {job_id} not found.")
+            console.err(f"Job {job_id} not found. Use `saharo jobs get <id>`.")
             raise typer.Exit(code=2)
         if e.status_code in (401, 403):
             console.err("Unauthorized. Admin access is required.")
@@ -235,24 +238,43 @@ def show_job(
         console.info(f"{key}: {data.get(key)}")
 
 
+@app.command("get", help="Fetch a job by id.")
+def get_job(
+        job_id: int = typer.Argument(...),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+):
+    _get_job(job_id=job_id, base_url=base_url, json_out=json_out)
+
+
+@app.command("show", hidden=True)
+def show_job(
+        job_id: int = typer.Argument(...),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+):
+    console.warn("Deprecated: use `saharo jobs get` instead.")
+    _get_job(job_id=job_id, base_url=base_url, json_out=json_out)
+
+
 @app.command("clear", help="Prune old jobs with safety prompts.")
 def clear_jobs(
-    older_than_days: int | None = typer.Option(
-        None,
-        "--older-than",
-        help="Delete jobs older than N days (default: 30).",
-    ),
-    status: str | None = typer.Option(
-        None,
-        "--status",
-        help="Status filter: finished, failed, claimed, queued.",
-    ),
-    server_id: int | None = typer.Option(None, "--server-id", help="Filter by server ID."),
-    agent_id: int | None = typer.Option(None, "--agent-id", help="Filter by agent ID."),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be deleted."),
-    yes: bool = typer.Option(False, "--yes", help="Skip confirmation prompt."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
-    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+        older_than_days: int | None = typer.Option(
+            None,
+            "--older-than",
+            help="Delete jobs older than N days (default: 30).",
+        ),
+        status: str | None = typer.Option(
+            None,
+            "--status",
+            help="Status filter: finished, failed, claimed, queued.",
+        ),
+        server_id: int | None = typer.Option(None, "--server-id", help="Filter by server ID."),
+        agent_id: int | None = typer.Option(None, "--agent-id", help="Filter by agent ID."),
+        dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be deleted."),
+        yes: bool = typer.Option(False, "--yes", help="Skip confirmation prompt."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
     if not yes:
         confirmed = typer.confirm("Delete matching jobs?", default=False)

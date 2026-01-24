@@ -40,10 +40,10 @@ class LicenseEntitlements:
 
 
 def resolve_entitlements(
-    license_api_base_url: str,
-    license_key: str,
-    *,
-    timeout_s: float = 10.0,
+        license_api_base_url: str,
+        license_key: str,
+        *,
+        timeout_s: float = 10.0,
 ) -> LicenseEntitlements:
     base = (license_api_base_url or "").strip().rstrip("/")
     if not base:

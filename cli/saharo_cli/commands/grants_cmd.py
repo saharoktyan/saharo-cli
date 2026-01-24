@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import typer
 from rich.table import Table
+from saharo_client import ApiError
 
 from .. import console
 from ..config import load_config
 from ..http import make_client
-from saharo_client import ApiError
 
 app = typer.Typer(help="Grants commands (admin only).")
 
@@ -127,8 +127,8 @@ def _validate_route_for_protocol(protocol_code: str | None, route: str | None) -
 
 @app.command("list")
 def list_grants(
-    user_id: int | None = typer.Option(None, "--user-id", help="Filter by user ID."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override API base URL."),
+        user_id: int | None = typer.Option(None, "--user-id", help="Filter by user ID."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override API base URL."),
 ):
     cfg = load_config()
     client = make_client(cfg, profile=None, base_url_override=base_url)
@@ -186,20 +186,18 @@ def list_grants(
 
 @app.command("create")
 def create_grant(
-    user: str | None = typer.Option(None, "--user", help="Target user (id, username, or telegram id)."),
-    user_id: int | None = typer.Option(None, "--user-id", help="Target user ID."),
-    server: str | None = typer.Option(None, "--server", help="Server (id or name)."),
-    server_id: int | None = typer.Option(None, "--server-id", help="Server ID."),
-    protocol: str | None = typer.Argument(None, help="Protocol code (awg, xray, ...)"),
-    route: str | None = typer.Option(None, "--route", help="Route for xray grants (e.g. tcp, ws)."),
-    device_limit: int | None = typer.Option(None, "--device-limit", help="Device limit."),
-    note: str | None = typer.Option(None, "--note", help="Grant note."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override API base URL."),
+        user: str | None = typer.Option(None, "--user", help="Target user (id, username, or telegram id)."),
+        user_id: int | None = typer.Option(None, "--user-id", help="Target user ID."),
+        server: str | None = typer.Option(None, "--server", help="Server (id or name)."),
+        server_id: int | None = typer.Option(None, "--server-id", help="Server ID."),
+        protocol: str | None = typer.Argument(None, help="Protocol code (awg, xray, ...)"),
+        route: str | None = typer.Option(None, "--route", help="Route for xray grants (e.g. tcp, ws)."),
+        device_limit: int | None = typer.Option(None, "--device-limit", help="Device limit."),
+        note: str | None = typer.Option(None, "--note", help="Grant note."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override API base URL."),
 ):
     cfg = load_config()
     client = make_client(cfg, profile=None, base_url_override=base_url)
-
-
 
     try:
         resolved_user_id = _resolve_user_id(client, user, user_id)
@@ -228,8 +226,8 @@ def create_grant(
 
 @app.command("revoke")
 def revoke_grant(
-    grant_id: int = typer.Option(..., "--id", help="Grant ID."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override API base URL."),
+        grant_id: int = typer.Option(..., "--id", help="Grant ID."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override API base URL."),
 ):
     cfg = load_config()
     client = make_client(cfg, profile=None, base_url_override=base_url)

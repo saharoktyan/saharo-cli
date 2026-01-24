@@ -8,11 +8,11 @@ from .config import AppConfig, apply_profile, normalize_base_url
 
 
 def make_client(
-    cfg: AppConfig,
-    *,
-    profile: str | None,
-    base_url_override: str | None,
-    check_compat: bool = True,
+        cfg: AppConfig,
+        *,
+        profile: str | None,
+        base_url_override: str | None,
+        check_compat: bool = True,
 ) -> SaharoClient:
     effective_cfg = apply_profile(cfg, profile)
     base_url = normalize_base_url(base_url_override or effective_cfg.base_url, warn=True)

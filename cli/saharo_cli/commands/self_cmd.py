@@ -10,14 +10,13 @@ from pathlib import Path
 
 import httpx
 import typer
+from saharo_client import ApiError
 
 from ..compat import cli_version
 from ..config import load_config
 from ..console import err, info, ok, warn
 from ..http import make_client
 from ..semver import parse_semver
-from saharo_client import ApiError
-
 
 app = typer.Typer(help="Manage CLI updates from your host.")
 

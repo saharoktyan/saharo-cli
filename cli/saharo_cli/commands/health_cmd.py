@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import platform as platform_mod
+from datetime import datetime, timezone
 
 import httpx
 import typer
@@ -11,7 +11,6 @@ from ..config import load_config, resolve_license_api_url
 from ..console import err, info, ok, print_json, warn
 from ..registry_store import load_registry
 from ..semver import is_version_in_range
-
 
 app = typer.Typer(help="Diagnostics for hub compatibility and updates.")
 
@@ -35,8 +34,8 @@ def _emit(level: str, msg: str, *, json_mode: bool) -> None:
 
 @app.command("health")
 def health(
-    json_output: bool = typer.Option(False, "--json", help="Output JSON only."),
-    verbose: bool = typer.Option(False, "--verbose", help="Show extra details."),
+        json_output: bool = typer.Option(False, "--json", help="Output JSON only."),
+        verbose: bool = typer.Option(False, "--verbose", help="Show extra details."),
 ) -> None:
     cfg = load_config()
     base_url = (cfg.base_url or "").strip()
@@ -66,7 +65,8 @@ def health(
 
     if not base_url:
         hub_errors.append("base_url_not_configured")
-        _emit("warn", "Base URL is not configured. Run `saharo settings set base_url ...` first.", json_mode=json_output)
+        _emit("warn", "Base URL is not configured. Run `saharo settings set base_url ...` first.",
+              json_mode=json_output)
     else:
         endpoint = f"{base_url.rstrip('/')}/version"
         try:

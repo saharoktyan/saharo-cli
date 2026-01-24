@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 import logging
+
 
 def setup_logging(verbose: bool) -> None:
     # базовый уровень

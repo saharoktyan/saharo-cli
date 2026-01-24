@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import posixpath
+import re
 import shlex
 import shutil
 import socket
@@ -20,14 +22,6 @@ import typer
 from rich.prompt import Confirm
 from rich.text import Text
 
-from .. import console
-from ..license_resolver import (
-    IMAGE_COMPONENTS,
-    LicenseEntitlements,
-    LicenseEntitlementsError,
-    resolve_entitlements,
-)
-from ..ssh import SSHSession, SshTarget, build_control_path, is_windows
 from .host_https import (
     HttpsSetupError,
     ensure_https,
@@ -35,8 +29,15 @@ from .host_https import (
     normalize_domain,
     report_https_failure,
 )
-
-import re
+from .. import console
+from ..license_resolver import (
+    IMAGE_COMPONENTS,
+    LicenseEntitlements,
+    LicenseEntitlementsError,
+    resolve_entitlements,
+)
+from ..path_utils import looks_like_windows_path
+from ..ssh import SSHSession, SshTarget, build_control_path, is_windows
 
 DEFAULT_LIC_URL = "https://downloads.saharoktyan.ru"
 
@@ -56,6 +57,7 @@ DEFAULT_HEALTH_LOG_TAIL = 60
 DEFAULT_API_CONTAINER = "saharo_host_api"
 _TRANSIENT_CURL_EXIT_CODES = {7, 28, 52, 56}
 _LICENSE_STATE_RELATIVE_PATH = Path("state") / "license.json"
+_LICENSE_STATE_RELATIVE_POSIX = posixpath.join("state", "license.json")
 
 _LAST_PULL_STDERR: str | None = None
 
@@ -95,9 +97,9 @@ def _emit_license_request(url: str, headers: dict[str, str] | None) -> None:
 
 
 def _emit_license_error(
-    url: str,
-    headers: dict[str, str] | None,
-    response: httpx.Response,
+        url: str,
+        headers: dict[str, str] | None,
+        response: httpx.Response,
 ) -> None:
     console.err(f"License API request failed: HTTP {response.status_code}")
     console.err(f"URL: {url}")
@@ -125,12 +127,12 @@ def _extract_license_detail(response: httpx.Response) -> object | None:
 
 
 def _license_api_request(
-    method: str,
-    url: str,
-    *,
-    headers: dict[str, str] | None,
-    json_body: dict | None = None,
-    timeout_s: float = 10.0,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str] | None,
+        json_body: dict | None = None,
+        timeout_s: float = 10.0,
 ) -> httpx.Response:
     if _is_verbose():
         _emit_license_request(url, headers)
@@ -182,6 +184,31 @@ class BootstrapInputs:
     def host_dir(self) -> Path:
         return Path(self.install_dir).expanduser().resolve() / "host"
 
+    # Remote paths must stay POSIX to avoid Windows drive letters in SSH commands.
+    @property
+    def host_dir_posix(self) -> str:
+        return posixpath.join(self.install_dir, "host")
+
+    @property
+    def compose_path_posix(self) -> str:
+        return posixpath.join(self.host_dir_posix, "docker-compose.yml")
+
+    @property
+    def env_path_posix(self) -> str:
+        return posixpath.join(self.host_dir_posix, ".env")
+
+    @property
+    def readme_path_posix(self) -> str:
+        return posixpath.join(self.host_dir_posix, "README.txt")
+
+    @property
+    def data_dir_posix(self) -> str:
+        return posixpath.join(self.host_dir_posix, "data", "postgres")
+
+    @property
+    def license_state_path_posix(self) -> str:
+        return posixpath.join(self.host_dir_posix, _LICENSE_STATE_RELATIVE_POSIX)
+
     @property
     def compose_path(self) -> Path:
         return self.host_dir / "docker-compose.yml"
@@ -221,11 +248,11 @@ class _RegistryActivation:
 
 
 def fetch_registry_creds_from_license(
-    lic_url: str,
-    *,
-    license_key: str,
-    machine_name: str,
-    resolved_versions: dict[str, str] | None = None,
+        lic_url: str,
+        *,
+        license_key: str,
+        machine_name: str,
+        resolved_versions: dict[str, str] | None = None,
 ) -> _RegistryActivation:
     url = lic_url.rstrip("/") + "/v1/activate"
     payload = {"machine_name": machine_name, "note": "host bootstrap"}
@@ -292,50 +319,63 @@ def _print_entitlement_versions(entitlements: LicenseEntitlements) -> None:
     )
 
 
+def _normalize_remote_install_dir(install_dir: str) -> str:
+    clean = (install_dir or "").strip()
+    if not clean:
+        return DEFAULT_INSTALL_DIR
+    if looks_like_windows_path(clean):
+        console.err("In SSH mode, --install-dir must be a Linux path like /opt/saharo.")
+        raise typer.Exit(code=2)
+    return clean
+
+
 def host_bootstrap(
-    api_url: str | None = typer.Option(None, "--api-url", help="Public base URL for users/clients."),
-    x_root_secret: str | None = typer.Option(None, "--x-root-secret", help="Root secret for /admin/bootstrap."),
-    db_password: str | None = typer.Option(None, "--db-password", help="Postgres password."),
-    admin_username: str | None = typer.Option(None, "--admin-username", help="Admin username."),
-    admin_password: str | None = typer.Option(None, "--admin-password", help="Admin password."),
-    admin_api_key_name: str = typer.Option("root", "--admin-api-key-name", help="Admin API key name."),
-    telegram_bot_token: str | None = typer.Option(
-        None,
-        "--telegram-bot-token",
-        help="Telegram bot token for Telegram WebApp auth (optional).",
-    ),
-    install_dir: str = typer.Option(DEFAULT_INSTALL_DIR, "--install-dir", help="Installation directory."),
-    registry: str = typer.Option(DEFAULT_REGISTRY, "--registry", help="Container registry for images."),
-    version: str | None = typer.Option(None, "--version", help="Exact host version tag to deploy, e.g. 1.4.1"),
-    lic_url: str = typer.Option(DEFAULT_LIC_URL, "--lic-url", help="License API base URL used to resolve versions."),
-    no_license: bool = typer.Option(False, "--no-license", help="Do not query license API; use --tag or --version."),
-    license_key: str | None = typer.Option(None, "--license-key", help="License key for version resolution."),
-    tag: str = typer.Option(DEFAULT_TAG, "--tag", help="Image tag to deploy (fallback)."),
-    wipe_data: bool = typer.Option(False, "--wipe-data", help="DANGEROUS: delete all host data before install."),
-    confirm_wipe: bool = typer.Option(
-        False,
-        "--confirm-wipe",
-        help="Confirm the irreversible wipe (required with --wipe-data in non-interactive mode).",
-    ),
-    skip_https: bool = typer.Option(False, "--skip-https", help="Skip HTTPS setup entirely."),
-    print_versions: bool = typer.Option(
-        False,
-        "--print-versions",
-        help="Resolve versions from license entitlements and exit.",
-    ),
-    non_interactive: bool = typer.Option(False, "--non-interactive", help="Fail if required flags are missing."),
-    assume_yes: bool = typer.Option(False, "--yes", help="Assume yes where safe."),
-    no_docker_install: bool = typer.Option(False, "--no-docker-install", help="Do not offer docker install."),
-    force: bool = typer.Option(
-        False,
-        "--force",
-        help="Overwrite generated files and recreate containers (keeps Postgres data).",
-    ),
-    rotate_jwt_secret: bool = typer.Option(False, "--rotate-jwt-secret", help="Rotate JWT secret on reinstall."),
-    ssh_host: str | None = typer.Option(None, "--ssh-host", help="SSH target in user@host form."),
-    ssh_port: int = typer.Option(22, "--ssh-port", help="SSH port."),
-    ssh_key: str | None = typer.Option(None, "--ssh-key", help="SSH private key path."),
-    ssh_sudo: bool = typer.Option(True, "--ssh-sudo/--no-ssh-sudo", help="Use sudo over SSH for privileged commands."),
+        api_url: str | None = typer.Option(None, "--api-url", help="Public base URL for users/clients."),
+        x_root_secret: str | None = typer.Option(None, "--x-root-secret", help="Root secret for /admin/bootstrap."),
+        db_password: str | None = typer.Option(None, "--db-password", help="Postgres password."),
+        admin_username: str | None = typer.Option(None, "--admin-username", help="Admin username."),
+        admin_password: str | None = typer.Option(None, "--admin-password", help="Admin password."),
+        admin_api_key_name: str = typer.Option("root", "--admin-api-key-name", help="Admin API key name."),
+        telegram_bot_token: str | None = typer.Option(
+            None,
+            "--telegram-bot-token",
+            help="Telegram bot token for Telegram WebApp auth (optional).",
+        ),
+        install_dir: str = typer.Option(DEFAULT_INSTALL_DIR, "--install-dir", help="Installation directory."),
+        registry: str = typer.Option(DEFAULT_REGISTRY, "--registry", help="Container registry for images."),
+        version: str | None = typer.Option(None, "--version", help="Exact host version tag to deploy, e.g. 1.4.1"),
+        lic_url: str = typer.Option(DEFAULT_LIC_URL, "--lic-url",
+                                    help="License API base URL used to resolve versions."),
+        no_license: bool = typer.Option(False, "--no-license",
+                                        help="Do not query license API; use --tag or --version."),
+        license_key: str | None = typer.Option(None, "--license-key", help="License key for version resolution."),
+        tag: str = typer.Option(DEFAULT_TAG, "--tag", help="Image tag to deploy (fallback)."),
+        wipe_data: bool = typer.Option(False, "--wipe-data", help="DANGEROUS: delete all host data before install."),
+        confirm_wipe: bool = typer.Option(
+            False,
+            "--confirm-wipe",
+            help="Confirm the irreversible wipe (required with --wipe-data in non-interactive mode).",
+        ),
+        skip_https: bool = typer.Option(False, "--skip-https", help="Skip HTTPS setup entirely."),
+        print_versions: bool = typer.Option(
+            False,
+            "--print-versions",
+            help="Resolve versions from license entitlements and exit.",
+        ),
+        non_interactive: bool = typer.Option(False, "--non-interactive", help="Fail if required flags are missing."),
+        assume_yes: bool = typer.Option(False, "--yes", help="Assume yes where safe."),
+        no_docker_install: bool = typer.Option(False, "--no-docker-install", help="Do not offer docker install."),
+        force: bool = typer.Option(
+            False,
+            "--force",
+            help="Overwrite generated files and recreate containers (keeps Postgres data).",
+        ),
+        rotate_jwt_secret: bool = typer.Option(False, "--rotate-jwt-secret", help="Rotate JWT secret on reinstall."),
+        ssh_host: str | None = typer.Option(None, "--ssh-host", help="SSH target in user@host form."),
+        ssh_port: int = typer.Option(22, "--ssh-port", help="SSH port."),
+        ssh_key: str | None = typer.Option(None, "--ssh-key", help="SSH private key path."),
+        ssh_sudo: bool = typer.Option(True, "--ssh-sudo/--no-ssh-sudo",
+                                      help="Use sudo over SSH for privileged commands."),
 
 ):
     """Interactive installation wizard for Saharo host stack.
@@ -358,12 +398,16 @@ def host_bootstrap(
         console.err("Local host bootstrap is not supported on Windows. Use --ssh-host to connect to a Linux host.")
         raise typer.Exit(code=2)
 
+    if ssh_host:
+        install_dir = _normalize_remote_install_dir(install_dir)
+
     if wipe_data:
         _ensure_wipe_confirmed(
             install_dir=install_dir,
             non_interactive=non_interactive,
             assume_yes=assume_yes,
             confirm_wipe=confirm_wipe,
+            remote=bool(ssh_host),
         )
 
     if not no_license and lic_url and not license_key:
@@ -430,7 +474,7 @@ def host_bootstrap(
         if activation.registry_password is None:
             console.err(
                 "Registry password not returned (credentials not rotated). Re-run "
-                "`saharo auth activate --login` or re-activate with rotate enabled, then retry."
+                "`saharo host bootstrap --license-key <key>` or rebind the license with rotation enabled, then retry."
             )
             raise typer.Exit(code=2)
         registry = activation.registry_url or registry
@@ -502,34 +546,36 @@ def host_bootstrap(
 
 
 def _host_bootstrap_ssh(
-    *,
-    ssh_host: str,
-    ssh_port: int,
-    ssh_key: str | None,
-    ssh_sudo: bool,
-    api_url: str | None,
-    x_root_secret: str | None,
-    db_password: str | None,
-    admin_username: str | None,
-    admin_password: str | None,
-    admin_api_key_name: str,
-    telegram_bot_token: str | None,
-    install_dir: str,
-    registry: str,
-    tag: str,
-    non_interactive: bool,
-    assume_yes: bool,
-    no_docker_install: bool,
-    force: bool,
-    rotate_jwt_secret: bool,
-    lic_url: str,
-    no_license: bool,
-    license_key: str | None,
-    version: str | None,
-    entitlements: LicenseEntitlements | None,
-    wipe_data: bool,
-    skip_https: bool,
+        *,
+        ssh_host: str,
+        ssh_port: int,
+        ssh_key: str | None,
+        ssh_sudo: bool,
+        api_url: str | None,
+        x_root_secret: str | None,
+        db_password: str | None,
+        admin_username: str | None,
+        admin_password: str | None,
+        admin_api_key_name: str,
+        telegram_bot_token: str | None,
+        install_dir: str,
+        registry: str,
+        tag: str,
+        non_interactive: bool,
+        assume_yes: bool,
+        no_docker_install: bool,
+        force: bool,
+        rotate_jwt_secret: bool,
+        lic_url: str,
+        no_license: bool,
+        license_key: str | None,
+        version: str | None,
+        entitlements: LicenseEntitlements | None,
+        wipe_data: bool,
+        skip_https: bool,
 ) -> None:
+    install_dir = _normalize_remote_install_dir(install_dir)
+
     ssh_password = None
     if not ssh_key:
         if is_windows():
@@ -598,7 +644,7 @@ def _host_bootstrap_ssh(
             if activation.registry_password is None:
                 console.err(
                     "Registry password not returned (credentials not rotated). Re-run "
-                    "`saharo auth activate --login` or re-activate with rotate enabled, then retry."
+                    "`saharo host bootstrap --license-key <key>` or rebind the license with rotation enabled, then retry."
                 )
                 raise typer.Exit(code=2)
             registry = activation.registry_url or registry
@@ -718,24 +764,24 @@ def check_prereqs(inputs: BootstrapInputs) -> PrereqResult:
 
 
 def collect_inputs(
-    *,
-    api_url: str | None,
-    x_root_secret: str | None,
-    db_password: str | None,
-    admin_username: str | None,
-    admin_password: str | None,
-    admin_api_key_name: str,
-    telegram_bot_token: str | None,
-    install_dir: str,
-    registry: str,
-    tag: str,
-    non_interactive: bool,
-    assume_yes: bool,
-    no_docker_install: bool,
-    force: bool,
-    rotate_jwt_secret: bool,
-    skip_https: bool,
-    existing_jwt_secret: str | None = None,
+        *,
+        api_url: str | None,
+        x_root_secret: str | None,
+        db_password: str | None,
+        admin_username: str | None,
+        admin_password: str | None,
+        admin_api_key_name: str,
+        telegram_bot_token: str | None,
+        install_dir: str,
+        registry: str,
+        tag: str,
+        non_interactive: bool,
+        assume_yes: bool,
+        no_docker_install: bool,
+        force: bool,
+        rotate_jwt_secret: bool,
+        skip_https: bool,
+        existing_jwt_secret: str | None = None,
 ) -> BootstrapInputs:
     missing = []
     if not api_url:
@@ -895,17 +941,22 @@ def _ensure_remote_sudo(session: SSHSession, target: SshTarget, *, non_interacti
     target.sudo_mode = "password"
 
 
-def _remote_run(session: SSHSession, command: str, *, sudo: bool) -> subprocess.CompletedProcess:
-    return session.run_privileged(command) if sudo else session.run(command)
+def _remote_run(session: SSHSession,
+                command: str,
+                *,
+                sudo: bool,
+                cwd: str | None = None,
+                ) -> subprocess.CompletedProcess:
+    return session.run_privileged(command, cwd=cwd) if sudo else session.run(command, cwd=cwd)
 
 
 def _remote_run_input(
-    session: SSHSession,
-    command: str,
-    content: str,
-    *,
-    log_label: str,
-    sudo: bool,
+        session: SSHSession,
+        command: str,
+        content: str,
+        *,
+        log_label: str,
+        sudo: bool,
 ) -> subprocess.CompletedProcess:
     if sudo:
         return session.run_input_privileged(command, content, log_label=log_label)
@@ -962,7 +1013,7 @@ def _remote_install_docker_linux(session: SSHSession, *, sudo: bool) -> None:
 
 def _remote_can_write_install_dir(session: SSHSession, install_dir: str) -> bool:
     clean_dir = install_dir.rstrip("/") or "/"
-    parent_dir = os.path.dirname(clean_dir) or "/"
+    parent_dir = posixpath.dirname(clean_dir) or "/"
     dir_q = shlex.quote(clean_dir)
     parent_q = shlex.quote(parent_dir)
     cmd = f"if [ -d {dir_q} ]; then [ -w {dir_q} ]; else [ -w {parent_q} ]; fi"
@@ -971,11 +1022,11 @@ def _remote_can_write_install_dir(session: SSHSession, install_dir: str) -> bool
 
 
 def _remote_write_files(session: SSHSession, inputs: BootstrapInputs, *, sudo: bool) -> None:
-    host_dir = str(inputs.host_dir)
-    data_dir = str(inputs.data_dir)
-    compose_path = str(inputs.compose_path)
-    env_path = str(inputs.env_path)
-    readme_path = str(inputs.readme_path)
+    host_dir = inputs.host_dir_posix
+    data_dir = inputs.data_dir_posix
+    compose_path = inputs.compose_path_posix
+    env_path = inputs.env_path_posix
+    readme_path = inputs.readme_path_posix
     host_q = shlex.quote(host_dir)
     exists_check = _remote_run(session, f"test -d {host_q}", sudo=sudo)
     if exists_check.returncode == 0 and not inputs.force:
@@ -1045,10 +1096,10 @@ def _remote_write_files(session: SSHSession, inputs: BootstrapInputs, *, sudo: b
 
 
 def _remote_backup_host_dir(
-    session: SSHSession, inputs: BootstrapInputs, *, sudo: bool
+        session: SSHSession, inputs: BootstrapInputs, *, sudo: bool
 ) -> str | None:
-    host_dir = str(inputs.host_dir)
-    data_dir = str(inputs.host_dir / "data")
+    host_dir = inputs.host_dir_posix
+    data_dir = posixpath.join(inputs.host_dir_posix, "data")
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     backup_path = f"{host_dir}.bak-{timestamp}"
     script = (
@@ -1076,20 +1127,31 @@ def _remote_backup_host_dir(
 
 
 def _remote_run_compose(
-    session: SSHSession,
-    inputs: BootstrapInputs,
-    args: Iterable[str],
-    *,
-    sudo: bool,
-    capture_output: bool = False,
-    check: bool = True,
+        session: SSHSession,
+        inputs: BootstrapInputs,
+        args: Iterable[str],
+        *,
+        sudo: bool,
+        capture_output: bool = False,
+        check: bool = True,
 ) -> subprocess.CompletedProcess:
-    compose_path = shlex.quote(str(inputs.compose_path))
-    cmd = f"docker compose -f {compose_path} " + " ".join(shlex.quote(arg) for arg in args)
-    res = _remote_run(session, cmd, sudo=sudo)
+    compose_path = shlex.quote(inputs.compose_path_posix)
+    env_path = shlex.quote(inputs.env_path_posix)
+    cmd = (
+            f"docker compose --env-file {env_path} -f {compose_path} "
+            + " ".join(shlex.quote(arg) for arg in args)
+    )
+
+    res = _remote_run(
+        session,
+        cmd,
+        sudo=sudo,
+        cwd=inputs.host_dir_posix,
+    )
+
     if check and res.returncode != 0:
-        stderr = (res.stderr or "").strip()
-        raise RuntimeError(stderr or "Remote docker compose command failed.")
+        out = ((res.stdout or "") + "\n" + (res.stderr or "")).strip()
+        raise RuntimeError(out or "Remote docker compose command failed.")
     return res
 
 
@@ -1159,10 +1221,10 @@ def _remote_verify_health(session: SSHSession, inputs: BootstrapInputs, *, sudo:
     console.info("Verifying API availability on the remote host...")
     runner = _remote_command_runner(session, sudo=sudo)
     if not _wait_for_api_ready(
-        inputs,
-        runner=runner,
-        timeout=DEFAULT_HEALTH_TIMEOUT,
-        interval=DEFAULT_HEALTH_INTERVAL,
+            inputs,
+            runner=runner,
+            timeout=DEFAULT_HEALTH_TIMEOUT,
+            interval=DEFAULT_HEALTH_INTERVAL,
     ):
         console.err("Health check timed out on the remote host.")
         _remote_diagnose_unreachable(session, inputs, sudo=sudo)
@@ -1229,6 +1291,10 @@ def _license_state_path(inputs: BootstrapInputs) -> Path:
     return inputs.host_dir / _LICENSE_STATE_RELATIVE_PATH
 
 
+def _license_state_path_posix(inputs: BootstrapInputs) -> str:
+    return posixpath.join(inputs.host_dir_posix, _LICENSE_STATE_RELATIVE_POSIX)
+
+
 def _build_license_state_payload(license_key: str, activation: _RegistryActivation) -> dict[str, object]:
     resolved_versions = activation.resolved_versions or {"host": activation.resolved_host_tag}
     return {
@@ -1245,10 +1311,10 @@ def _build_license_state_payload(license_key: str, activation: _RegistryActivati
 
 
 def _write_license_state_local(
-    inputs: BootstrapInputs,
-    *,
-    license_key: str,
-    activation: _RegistryActivation,
+        inputs: BootstrapInputs,
+        *,
+        license_key: str,
+        activation: _RegistryActivation,
 ) -> None:
     path = _license_state_path(inputs)
     payload = _build_license_state_payload(license_key, activation)
@@ -1260,16 +1326,16 @@ def _write_license_state_local(
 
 
 def _write_license_state_remote(
-    session: SSHSession,
-    inputs: BootstrapInputs,
-    *,
-    sudo: bool,
-    license_key: str,
-    activation: _RegistryActivation,
+        session: SSHSession,
+        inputs: BootstrapInputs,
+        *,
+        sudo: bool,
+        license_key: str,
+        activation: _RegistryActivation,
 ) -> None:
-    path = _license_state_path(inputs)
+    path = _license_state_path_posix(inputs)
     payload = _build_license_state_payload(license_key, activation)
-    state_dir = shlex.quote(str(path.parent))
+    state_dir = shlex.quote(posixpath.dirname(path))
     res = _remote_run(session, f"mkdir -p {state_dir}", sudo=sudo)
     if res.returncode != 0:
         console.err(res.stderr.strip() or "Failed to create license state directory.")
@@ -1280,7 +1346,7 @@ def _write_license_state_remote(
         raise typer.Exit(code=2)
     res = _remote_run_input(
         session,
-        f"cat > {shlex.quote(str(path))}",
+        f"cat > {shlex.quote(path)}",
         json.dumps(payload, indent=2, sort_keys=True),
         log_label="write license state",
         sudo=sudo,
@@ -1288,7 +1354,7 @@ def _write_license_state_remote(
     if res.returncode != 0:
         console.err(res.stderr.strip() or "Failed to write license state file.")
         raise typer.Exit(code=2)
-    res = _remote_run(session, f"chmod 600 {shlex.quote(str(path))}", sudo=sudo)
+    res = _remote_run(session, f"chmod 600 {shlex.quote(path)}", sudo=sudo)
     if res.returncode != 0:
         console.err(res.stderr.strip() or "Failed to set license state permissions.")
         raise typer.Exit(code=2)
@@ -1296,12 +1362,12 @@ def _write_license_state_remote(
 
 
 def _remote_bootstrap_license_cache(
-    session: SSHSession,
-    inputs: BootstrapInputs,
-    *,
-    sudo: bool,
-    license_key: str,
-    activation: _RegistryActivation,
+        session: SSHSession,
+        inputs: BootstrapInputs,
+        *,
+        sudo: bool,
+        license_key: str,
+        activation: _RegistryActivation,
 ) -> None:
     payload = _build_license_snapshot_payload(license_key, activation)
     headers = {
@@ -1342,7 +1408,7 @@ def _remote_bootstrap_license_cache(
 
 
 def _remote_http_post_json(
-    session: SSHSession, url: str, payload: dict[str, object], headers: dict[str, str]
+        session: SSHSession, url: str, payload: dict[str, object], headers: dict[str, str]
 ) -> tuple[int | None, str | None]:
     payload_json = json.dumps(payload)
     if session.run("command -v curl >/dev/null 2>&1").returncode == 0:
@@ -1400,14 +1466,12 @@ def _remote_http_post_json(
 def _print_remote_summary(inputs: BootstrapInputs, *, ssh_host: str, public_api_url: str | None = None) -> None:
     console.rule("[bold]Next steps[/]")
     console.print(f"Remote host: {ssh_host}")
-    console.print(f"Host install dir: {inputs.host_dir}")
+    console.print(f"Host install dir: {inputs.host_dir_posix}")
     console.print(f"Local API address: {inputs.api_base}")
     api_url = public_api_url or inputs.api_url
     console.print(f"Public api-url: {api_url}")
     console.print(f"Login from another machine: saharo auth login --url {api_url} ...")
-    console.print(
-        f"View logs: docker compose -f {inputs.compose_path} logs -f api"
-    )
+    console.print(f"View logs: docker compose -f {inputs.compose_path_posix} logs -f api")
 
 
 def _maybe_setup_https_local(inputs: BootstrapInputs) -> str | None:
@@ -1446,13 +1510,13 @@ def _maybe_setup_https_local(inputs: BootstrapInputs) -> str | None:
 
 
 def _maybe_setup_https_remote(
-    session: SSHSession,
-    inputs: BootstrapInputs,
-    *,
-    ssh_host: str,
-    ssh_port: int,
-    ssh_key: str | None,
-    sudo: bool,
+        session: SSHSession,
+        inputs: BootstrapInputs,
+        *,
+        ssh_host: str,
+        ssh_port: int,
+        ssh_key: str | None,
+        sudo: bool,
 ) -> str | None:
     if inputs.skip_https:
         console.info("HTTPS setup skipped (--skip-https).")
@@ -1490,6 +1554,7 @@ def _maybe_setup_https_remote(
         console.warn("Retry with: " + " ".join(retry))
         return inputs.api_url_original
 
+
 def _get_api_logs(inputs: BootstrapInputs, *, tail: int = 30) -> str | None:
     try:
         res = _run_compose(inputs, ["logs", "--tail", str(tail), "api"], check=False, capture_output=True)
@@ -1502,7 +1567,7 @@ def _get_api_logs(inputs: BootstrapInputs, *, tail: int = 30) -> str | None:
 
 
 def _remote_get_api_logs(
-    session: SSHSession, inputs: BootstrapInputs, *, tail: int = 30, sudo: bool
+        session: SSHSession, inputs: BootstrapInputs, *, tail: int = 30, sudo: bool
 ) -> str | None:
     res = _remote_run_compose(
         session, inputs, ["logs", "--tail", str(tail), "api"], sudo=sudo, check=False
@@ -1530,7 +1595,7 @@ def _get_container_logs(*, tail: int = DEFAULT_HEALTH_LOG_TAIL) -> str | None:
 
 
 def _remote_get_container_logs(
-    session: SSHSession, *, tail: int = DEFAULT_HEALTH_LOG_TAIL, sudo: bool
+        session: SSHSession, *, tail: int = DEFAULT_HEALTH_LOG_TAIL, sudo: bool
 ) -> str | None:
     cmd = f"docker logs --tail {tail} {DEFAULT_API_CONTAINER}"
     res = _remote_run(session, cmd, sudo=sudo)
@@ -1551,7 +1616,7 @@ def _local_command_runner() -> Callable[[list[str]], subprocess.CompletedProcess
 
 
 def _remote_command_runner(
-    session: SSHSession, *, sudo: bool
+        session: SSHSession, *, sudo: bool
 ) -> Callable[[list[str]], subprocess.CompletedProcess[str]]:
     def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
         cmd_str = " ".join(shlex.quote(arg) for arg in cmd)
@@ -1561,7 +1626,7 @@ def _remote_command_runner(
 
 
 def _get_docker_health_status(
-    runner: Callable[[list[str]], subprocess.CompletedProcess[str]]
+        runner: Callable[[list[str]], subprocess.CompletedProcess[str]]
 ) -> str | None:
     res = runner(["docker", "inspect", "-f", "{{.State.Health.Status}}", DEFAULT_API_CONTAINER])
     if res.returncode != 0:
@@ -1573,7 +1638,7 @@ def _get_docker_health_status(
 
 
 def _curl_health_ok(
-    runner: Callable[[list[str]], subprocess.CompletedProcess[str]], url: str
+        runner: Callable[[list[str]], subprocess.CompletedProcess[str]], url: str
 ) -> bool:
     res = runner(
         [
@@ -1613,11 +1678,11 @@ def _health_body_ok_text(body: str) -> bool:
 
 
 def _wait_for_api_ready(
-    inputs: BootstrapInputs,
-    *,
-    runner: Callable[[list[str]], subprocess.CompletedProcess[str]],
-    timeout: float,
-    interval: float,
+        inputs: BootstrapInputs,
+        *,
+        runner: Callable[[list[str]], subprocess.CompletedProcess[str]],
+        timeout: float,
+        interval: float,
 ) -> bool:
     deadline = time.monotonic() + timeout
     url = f"{inputs.api_base}/health"
@@ -1632,12 +1697,12 @@ def _wait_for_api_ready(
 
 
 def _remote_diagnose_unreachable(
-    session: SSHSession,
-    inputs: BootstrapInputs,
-    *,
-    sudo: bool,
-    health_cmd: str | None = None,
-    health_result: subprocess.CompletedProcess | None = None,
+        session: SSHSession,
+        inputs: BootstrapInputs,
+        *,
+        sudo: bool,
+        health_cmd: str | None = None,
+        health_result: subprocess.CompletedProcess | None = None,
 ) -> None:
     console.err("API is not reachable on the remote host.")
     if health_cmd:
@@ -1649,7 +1714,7 @@ def _remote_diagnose_unreachable(
         console.print(stdout or "<empty>")
         console.info("Health check stderr:")
         console.print(stderr or "<empty>")
-    compose_path = shlex.quote(str(inputs.compose_path))
+    compose_path = shlex.quote(inputs.compose_path_posix)
     console.info("Remote container status (docker compose ps):")
     console.print(f"  docker compose -f {compose_path} ps")
     ps_res = _remote_run_compose(session, inputs, ["ps"], sudo=sudo, check=False)
@@ -1681,9 +1746,9 @@ def _remote_diagnose_unreachable(
 
 
 def _get_existing_jwt_secret_remote(
-    session: SSHSession, install_dir: str, *, sudo: bool
+        session: SSHSession, install_dir: str, *, sudo: bool
 ) -> str | None:
-    env_path = str(Path(install_dir) / "host" / ".env")
+    env_path = posixpath.join(install_dir, "host", ".env")
     res = _remote_run(session, f"cat {shlex.quote(env_path)}", sudo=sudo)
     if res.returncode != 0:
         return None
@@ -1694,7 +1759,7 @@ def _get_existing_jwt_secret_remote(
 
 @contextmanager
 def _remote_temporary_root_secret(
-    session: SSHSession, inputs: BootstrapInputs, *, sudo: bool
+        session: SSHSession, inputs: BootstrapInputs, *, sudo: bool
 ) -> Iterator[None]:
     updated = _remote_ensure_root_secret_env(session, inputs, sudo=sudo)
     if updated:
@@ -1704,9 +1769,9 @@ def _remote_temporary_root_secret(
 
 
 def _remote_ensure_root_secret_env(
-    session: SSHSession, inputs: BootstrapInputs, *, sudo: bool
+        session: SSHSession, inputs: BootstrapInputs, *, sudo: bool
 ) -> bool:
-    env_path = str(inputs.env_path)
+    env_path = inputs.env_path_posix
     res = _remote_run(session, f"cat {shlex.quote(env_path)}", sudo=sudo)
     if res.returncode == 0:
         current = read_env_content(res.stdout or "").get("ROOT_ADMIN_SECRET")
@@ -1741,7 +1806,7 @@ def _remote_restart_api(session: SSHSession, inputs: BootstrapInputs, *, sudo: b
 
 
 def _remote_wait_for_health(
-    session: SSHSession, inputs: BootstrapInputs, *, timeout: float, sudo: bool
+        session: SSHSession, inputs: BootstrapInputs, *, timeout: float, sudo: bool
 ) -> None:
     runner = _remote_command_runner(session, sudo=sudo)
     if _wait_for_api_ready(inputs, runner=runner, timeout=timeout, interval=DEFAULT_HEALTH_INTERVAL):
@@ -1752,7 +1817,7 @@ def _remote_wait_for_health(
 
 
 def _remote_verify_root_secret_env(
-    session: SSHSession, inputs: BootstrapInputs, *, sudo: bool
+        session: SSHSession, inputs: BootstrapInputs, *, sudo: bool
 ) -> None:
     cmd = "docker exec saharo_host_api env | grep ROOT_ADMIN_SECRET"
     res = _remote_run(session, f"sh -c {shlex.quote(cmd)}", sudo=sudo)
@@ -1797,13 +1862,17 @@ def write_files(inputs: BootstrapInputs) -> None:
 
 
 def _ensure_wipe_confirmed(
-    *,
-    install_dir: str,
-    non_interactive: bool,
-    assume_yes: bool,
-    confirm_wipe: bool,
+        *,
+        install_dir: str,
+        non_interactive: bool,
+        assume_yes: bool,
+        confirm_wipe: bool,
+        remote: bool = False,
 ) -> None:
-    data_dir = Path(install_dir).expanduser().resolve() / "host" / "data" / "postgres"
+    if remote:
+        data_dir = posixpath.join(install_dir, "host", "data", "postgres")
+    else:
+        data_dir = Path(install_dir).expanduser().resolve() / "host" / "data" / "postgres"
     console.warn("DANGEROUS: you are about to delete all host data.")
     console.warn(f"Postgres data directory will be removed: {data_dir}")
     if non_interactive:
@@ -1837,8 +1906,8 @@ def wipe_host_data(inputs: BootstrapInputs) -> None:
 
 
 def _remote_wipe_host_data(session: SSHSession, inputs: BootstrapInputs, *, sudo: bool) -> None:
-    data_dir = str(inputs.data_dir)
-    compose_path = shlex.quote(str(inputs.compose_path))
+    data_dir = inputs.data_dir_posix
+    compose_path = shlex.quote(inputs.compose_path_posix)
     console.warn("Wiping host data on remote (irreversible).")
     console.info(f"Deleting data directory: {data_dir}")
     exists_check = _remote_run(session, f"test -f {compose_path}", sudo=sudo)
@@ -1968,11 +2037,11 @@ def bootstrap_license_cache(inputs: BootstrapInputs, *, license_key: str, activa
 
 
 def verify_health(
-    inputs: BootstrapInputs,
-    *,
-    ssh_session: SSHSession | None = None,
-    ssh_host: str | None = None,
-    sudo: bool = False,
+        inputs: BootstrapInputs,
+        *,
+        ssh_session: SSHSession | None = None,
+        ssh_host: str | None = None,
+        sudo: bool = False,
 ) -> None:
     if ssh_session is not None or ssh_host is not None:
         if ssh_session is None:
@@ -1982,10 +2051,10 @@ def verify_health(
     console.info("Verifying API availability...")
     runner = _local_command_runner()
     if not _wait_for_api_ready(
-        inputs,
-        runner=runner,
-        timeout=DEFAULT_HEALTH_TIMEOUT,
-        interval=DEFAULT_HEALTH_INTERVAL,
+            inputs,
+            runner=runner,
+            timeout=DEFAULT_HEALTH_TIMEOUT,
+            interval=DEFAULT_HEALTH_INTERVAL,
     ):
         _diagnose_unreachable(inputs)
         raise typer.Exit(code=2)
@@ -1993,9 +2062,9 @@ def verify_health(
 
 
 def _report_bootstrap_http_error(
-    status: int,
-    body: str | None,
-    response: httpx.Response | None = None,
+        status: int,
+        body: str | None,
+        response: httpx.Response | None = None,
 ) -> None:
     console.err(f"Admin bootstrap failed with HTTP {status}.")
     if body:
@@ -2172,7 +2241,7 @@ def read_env_content(content: str) -> dict[str, str]:
         if not line or line.startswith("#"):
             continue
         if line.startswith("export "):
-            line = line[len("export ") :].strip()
+            line = line[len("export "):].strip()
         if "=" not in line:
             continue
         key, value = line.split("=", 1)
@@ -2258,11 +2327,11 @@ def _compose_pull_failed(inputs: BootstrapInputs) -> bool:
 
 
 def _run_compose(
-    inputs: BootstrapInputs,
-    args: Iterable[str],
-    *,
-    check: bool = True,
-    capture_output: bool = False,
+        inputs: BootstrapInputs,
+        args: Iterable[str],
+        *,
+        check: bool = True,
+        capture_output: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     cmd = ["docker", "compose", "-f", str(inputs.compose_path), *args]
     if capture_output:
@@ -2285,11 +2354,17 @@ def _validate_compose_local(inputs: BootstrapInputs) -> None:
 
 def _validate_compose_remote(session: SSHSession, inputs: BootstrapInputs, *, sudo: bool) -> None:
     console.info("Validating compose file...")
-    compose_path = shlex.quote(str(inputs.compose_path))
-    cmd = f"docker compose -f {compose_path} config -q"
-    res = _remote_run(session, cmd, sudo=sudo)
+
+    compose_path = shlex.quote(inputs.compose_path_posix)
+    env_path = shlex.quote(inputs.env_path_posix)
+    host_dir = inputs.host_dir_posix
+
+    cmd = f"docker compose --env-file {env_path} -f {compose_path} config -q"
+    res = _remote_run(session, cmd, sudo=sudo, cwd=host_dir)
+
     if res.returncode == 0:
         return
+
     console.err("Compose validation failed on remote host. Fix docker-compose.yml and retry.")
     stderr = (res.stderr or "").strip()
     if stderr:
@@ -2390,12 +2465,12 @@ def docker_login_local(registry_url: str, username: str, password: str) -> None:
 
 
 def docker_login_ssh(
-    session: SSHSession,
-    registry_url: str,
-    username: str,
-    password: str,
-    *,
-    sudo: bool,
+        session: SSHSession,
+        registry_url: str,
+        username: str,
+        password: str,
+        *,
+        sudo: bool,
 ) -> None:
     registry_host = normalize_registry_host(registry_url)
     if not registry_host:

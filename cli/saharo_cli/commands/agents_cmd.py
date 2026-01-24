@@ -6,13 +6,15 @@ import os
 import shutil
 import subprocess
 import time
+import tomllib
 from dataclasses import dataclass
 from urllib.parse import urlparse
+
 import typer
 from rich.table import Table
-import tomllib
-
 from saharo_client import ApiError, NetworkError
+
+from .host_bootstrap import DEFAULT_REGISTRY, normalize_registry_host
 from .. import console
 from ..config import load_config, AgentConfig, AppConfig, save_config, normalize_base_url, resolve_license_api_url
 from ..formatting import format_age, format_list_timestamp
@@ -25,7 +27,6 @@ from ..license_resolver import (
 )
 from ..registry_store import load_registry
 from ..ssh import SshTarget, SSHSession, build_control_path, _ensure_sudo_mode, _sudo_prefix, is_windows
-from .host_bootstrap import DEFAULT_REGISTRY
 
 app = typer.Typer(help="Agents commands.")
 
@@ -42,7 +43,7 @@ DEFAULT_TAG = "1.0.0"
 
 
 def _resolve_entitlements_from_license(
-    lic_url: str, license_key: str
+        lic_url: str, license_key: str
 ) -> LicenseEntitlements:
     try:
         return resolve_entitlements(lic_url, license_key)
@@ -50,13 +51,44 @@ def _resolve_entitlements_from_license(
         console.err(str(exc))
         raise typer.Exit(code=2)
 
+
+def _resolve_agent_version_from_host_api(cfg: AppConfig) -> tuple[str, str | None] | None:
+    client = make_client(cfg, profile=None, base_url_override=None)
+    try:
+        data = client.admin_license_versions()
+    except (ApiError, NetworkError):
+        return None
+    finally:
+        client.close()
+
+    versions = data.get("versions") if isinstance(data, dict) else {}
+    if not isinstance(versions, dict):
+        return None
+
+    resolved_versions = versions.get("resolved_versions")
+    if not isinstance(resolved_versions, dict):
+        resolved_versions = versions
+    agent_tag = resolved_versions.get("agent")
+    if not isinstance(agent_tag, str) or not agent_tag.strip():
+        return None
+
+    registry_url = None
+    registry = versions.get("registry")
+    if isinstance(registry, dict):
+        reg_url = str(registry.get("url") or "").strip()
+        if reg_url:
+            registry_url = normalize_registry_host(reg_url) or None
+
+    return agent_tag.strip(), registry_url
+
+
 @app.command("list")
 def list_agents(
-    profile: str | None = typer.Option(None, "--profile", help="Config profile name."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
-    page: int = typer.Option(1, "--page", help="Page number (1-based)."),
-    page_size: int = typer.Option(50, "--page-size", help="Number of agents per page."),
-    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+        profile: str | None = typer.Option(None, "--profile", help="Config profile name."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        page: int = typer.Option(1, "--page", help="Page number (1-based)."),
+        page_size: int = typer.Option(50, "--page-size", help="Number of agents per page."),
+        json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
     if page < 1:
         console.err("--page must be >= 1.")
@@ -109,10 +141,10 @@ def list_agents(
 
 @app.command("show")
 def show_agent(
-    agent_id: int = typer.Argument(...),
-    profile: str | None = typer.Option(None, "--profile", help="Config profile name."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
-    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+        agent_id: int = typer.Argument(...),
+        profile: str | None = typer.Option(None, "--profile", help="Config profile name."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
     cfg = load_config()
     client = make_client(cfg, profile=profile, base_url_override=base_url)
@@ -149,11 +181,11 @@ def show_agent(
 
 @app.command("delete")
 def delete_agent(
-    agent_id: int = typer.Argument(...),
-    yes: bool = typer.Option(False, "--yes", help="Skip confirmation prompt."),
-    force: bool = typer.Option(False, "--force", help="Detach servers before deleting the agent."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
-    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+        agent_id: int = typer.Argument(...),
+        yes: bool = typer.Option(False, "--yes", help="Skip confirmation prompt."),
+        force: bool = typer.Option(False, "--force", help="Detach servers before deleting the agent."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
     if not yes:
         confirmed = typer.confirm(f"Delete agent {agent_id}?", default=False)
@@ -192,11 +224,11 @@ def delete_agent(
 
 @app.command("uninstall", help="Run remote uninstall on an agent-managed server.")
 def uninstall_agent(
-    agent_name_or_id: str = typer.Argument(..., help="Agent name or numeric id."),
-    force: bool = typer.Option(False, "--force", help="Proceed even if the agent is attached to servers."),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be removed without deleting anything."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
-    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+        agent_name_or_id: str = typer.Argument(..., help="Agent name or numeric id."),
+        force: bool = typer.Option(False, "--force", help="Proceed even if the agent is attached to servers."),
+        dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be removed without deleting anything."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
     cfg = load_config()
     client = make_client(cfg, profile=None, base_url_override=base_url)
@@ -234,16 +266,16 @@ def uninstall_agent(
 
 @app.command("purge", help="Destroy all saharo assets on a remote host.")
 def purge_agent(
-    agent_name_or_id: str = typer.Argument(..., help="Agent name or numeric id."),
-    yes_i_really_want_to_delete_everything: bool = typer.Option(
-        False,
-        "--yes-i-really-want-to-delete-everything",
-        help="Confirm destructive cleanup of all saharo assets on the remote host.",
-    ),
-    force: bool = typer.Option(False, "--force", help="Proceed even if the agent is attached to servers."),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be removed without deleting anything."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
-    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+        agent_name_or_id: str = typer.Argument(..., help="Agent name or numeric id."),
+        yes_i_really_want_to_delete_everything: bool = typer.Option(
+            False,
+            "--yes-i-really-want-to-delete-everything",
+            help="Confirm destructive cleanup of all saharo assets on the remote host.",
+        ),
+        force: bool = typer.Option(False, "--force", help="Proceed even if the agent is attached to servers."),
+        dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be removed without deleting anything."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
     if not yes_i_really_want_to_delete_everything:
         console.err("Refusing to purge without --yes-i-really-want-to-delete-everything.")
@@ -288,10 +320,10 @@ def purge_agent(
 
 
 def _create_agent_invite(
-    name: str = typer.Option(..., "--name", help="Agent name."),
-    note: str | None = typer.Option(None, "--note", help="Optional note."),
-    expires_minutes: int | None = typer.Option(None, "--expires-minutes", help="Invite expiration in minutes."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        name: str = typer.Option(..., "--name", help="Agent name."),
+        note: str | None = typer.Option(None, "--note", help="Optional note."),
+        expires_minutes: int | None = typer.Option(None, "--expires-minutes", help="Invite expiration in minutes."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
 ):
     cfg = load_config()
     client = make_client(cfg, profile=None, base_url_override=base_url)
@@ -338,41 +370,43 @@ def _create_agent_invite(
 
 @app.command("create")
 def create_agent(
-    name: str = typer.Option(..., "--name", help="Agent name."),
-    note: str | None = typer.Option(None, "--note", help="Optional note."),
-    expires_minutes: int | None = typer.Option(None, "--expires-minutes", help="Invite expiration in minutes."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        name: str = typer.Option(..., "--name", help="Agent name."),
+        note: str | None = typer.Option(None, "--note", help="Optional note."),
+        expires_minutes: int | None = typer.Option(None, "--expires-minutes", help="Invite expiration in minutes."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
 ):
     _create_agent_invite(name=name, note=note, expires_minutes=expires_minutes, base_url=base_url)
 
 
-
 @app.command("install")
 def install_agent(
-    ssh_target: str | None = typer.Option(None, "--ssh", help="SSH target in user@host form."),
-    port: int = typer.Option(22, "--port", help="SSH port."),
-    key: str | None = typer.Option(None, "--key", help="SSH private key path."),
-    password: bool = typer.Option(False, "--password", help="Prompt for SSH password."),
-    sudo: bool = typer.Option(False, "--sudo", help="Use sudo -n for privileged commands."),
-    sudo_password: bool = typer.Option(False, "--sudo-password", help="Prompt for sudo password."),
-    with_docker: bool = typer.Option(False, "--with-docker", help="Bootstrap Docker if missing."),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Print actions without executing."),
-    invite: str = typer.Option(..., "--invite", help="Invite token."),
-    api_url: str | None = typer.Option(None, "--api-url", help="Override API base URL for agent."),
-    force_reregister: bool = typer.Option(False, "--force-reregister", help="Force agent to re-register even if state exists."),
-    timeout: int = typer.Option(REGISTRATION_TIMEOUT_S, "--timeout", help="Registration wait timeout in seconds."),
-    no_wait: bool = typer.Option(False, "--no-wait", help="Skip waiting for agent registration."),
-    show: bool = typer.Option(False, "--show", help="Show agent details after registration."),
-    json_out: bool = typer.Option(False, "--json", help="Output machine-readable JSON only."),
-    watch: bool = typer.Option(False, "--watch", help="Watch agent status after registration."),
-    follow: bool = typer.Option(False, "--follow", help="Follow agent logs after registration."),
-    local: bool = typer.Option(False, "--local", help="Install agent on the current machine using deploy/agent."),
-    local_path: str | None = typer.Option(None, "--local-path", help="Path to local deploy/agent directory."),
-    create_server: bool = typer.Option(False, "--create-server", help="Create a server record after registration."),
-    version: str | None = typer.Option(None, "--version", help="Exact agent version tag to deploy, e.g. 1.4.1"),
-    lic_url: str = typer.Option(DEFAULT_LIC_URL, "--lic-url", help="License API base URL used to resolve versions."),
-    no_license: bool = typer.Option(False, "--no-license", help="Do not query license API; use --tag or --version."),
-    tag: str = typer.Option(DEFAULT_TAG, "--tag", help="Image tag to deploy (fallback)."),
+        ssh_target: str | None = typer.Option(None, "--ssh", help="SSH target in user@host form."),
+        port: int = typer.Option(22, "--port", help="SSH port."),
+        key: str | None = typer.Option(None, "--key", help="SSH private key path."),
+        password: bool = typer.Option(False, "--password", help="Prompt for SSH password."),
+        sudo: bool = typer.Option(False, "--sudo", help="Use sudo -n for privileged commands."),
+        sudo_password: bool = typer.Option(False, "--sudo-password", help="Prompt for sudo password."),
+        with_docker: bool = typer.Option(False, "--with-docker", help="Bootstrap Docker if missing."),
+        dry_run: bool = typer.Option(False, "--dry-run", help="Print actions without executing."),
+        invite: str = typer.Option(..., "--invite", help="Invite token."),
+        api_url: str | None = typer.Option(None, "--api-url", help="Override API base URL for agent."),
+        force_reregister: bool = typer.Option(False, "--force-reregister",
+                                              help="Force agent to re-register even if state exists."),
+        timeout: int = typer.Option(REGISTRATION_TIMEOUT_S, "--timeout", help="Registration wait timeout in seconds."),
+        no_wait: bool = typer.Option(False, "--no-wait", help="Skip waiting for agent registration."),
+        show: bool = typer.Option(False, "--show", help="Show agent details after registration."),
+        json_out: bool = typer.Option(False, "--json", help="Output machine-readable JSON only."),
+        watch: bool = typer.Option(False, "--watch", help="Watch agent status after registration."),
+        follow: bool = typer.Option(False, "--follow", help="Follow agent logs after registration."),
+        local: bool = typer.Option(False, "--local", help="Install agent on the current machine using deploy/agent."),
+        local_path: str | None = typer.Option(None, "--local-path", help="Path to local deploy/agent directory."),
+        create_server: bool = typer.Option(False, "--create-server", help="Create a server record after registration."),
+        version: str | None = typer.Option(None, "--version", help="Exact agent version tag to deploy, e.g. 1.4.1"),
+        lic_url: str = typer.Option(DEFAULT_LIC_URL, "--lic-url",
+                                    help="License API base URL used to resolve versions."),
+        no_license: bool = typer.Option(False, "--no-license",
+                                        help="Do not query license API; use --tag or --version."),
+        tag: str = typer.Option(DEFAULT_TAG, "--tag", help="Image tag to deploy (fallback)."),
 ):
     cfg = load_config()
     invite_token = invite.strip()
@@ -395,25 +429,33 @@ def install_agent(
     if version:
         resolved_tag = version
     elif not no_license:
-        lic_url = resolve_license_api_url(cfg) or lic_url
-        registry_creds = load_registry()
-        license_key = registry_creds.license_key if registry_creds else None
-        if not license_key:
-            console.err("License key not found. Run `saharo auth activate` or pass --no-license.")
-            raise typer.Exit(code=2)
-        entitlements = _resolve_entitlements_from_license(lic_url, license_key)
-        resolved_tag = entitlements.agent
-        if registry_creds and registry_creds.url:
-            registry = registry_creds.url
-        console.ok(
-            "Resolved versions from license entitlements: "
-            f"host={entitlements.host} agent={entitlements.agent} cli={entitlements.cli} "
-            f"(allowed major={entitlements.allowed_major if entitlements.allowed_major is not None else 'unknown'})"
-        )
+        host_result = _resolve_agent_version_from_host_api(cfg)
+        if host_result:
+            resolved_tag, registry_override = host_result
+            if registry_override:
+                registry = registry_override
+            console.ok(f"Resolved agent version from host license cache: {resolved_tag}")
+        else:
+            lic_url = resolve_license_api_url(cfg) or lic_url
+            registry_creds = load_registry()
+            license_key = registry_creds.license_key if registry_creds else None
+            if not license_key:
+                console.err(
+                    "License key not found. Re-run `saharo host bootstrap --license-key <key>` "
+                    "or pass --no-license."
+                )
+                raise typer.Exit(code=2)
+            entitlements = _resolve_entitlements_from_license(lic_url, license_key)
+            resolved_tag = entitlements.agent
+            if registry_creds and registry_creds.url:
+                registry = registry_creds.url
+            console.ok(
+                "Resolved versions from license entitlements: "
+                f"host={entitlements.host} agent={entitlements.agent} cli={entitlements.cli} "
+                f"(allowed major={entitlements.allowed_major if entitlements.allowed_major is not None else 'unknown'})"
+            )
     else:
         resolved_tag = tag
-
-
 
     pwd = None
     if password:
@@ -506,7 +548,8 @@ def install_agent(
         raise typer.Exit(code=2)
 
     agent_api_url = _resolve_agent_api_url(cfg.base_url, api_url)
-    target = SshTarget(host=ssh_target, port=port, key_path=key, password=pwd, sudo=sudo, sudo_password=sudo_pwd, dry_run=dry_run)
+    target = SshTarget(host=ssh_target, port=port, key_path=key, password=pwd, sudo=sudo, sudo_password=sudo_pwd,
+                       dry_run=dry_run)
     base_dir = "/opt/saharo/agent"
     compose_path = f"{base_dir}/docker-compose.yml"
     env_path = f"{base_dir}/.env"
@@ -550,7 +593,7 @@ def install_agent(
         if res.returncode != 0:
             console.err(res.stderr.strip() or "Failed to create remote directory.")
             raise typer.Exit(code=2)
-    
+
         local_agent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "http-agent"))
         upload_res = session.put_dir_tar(local_agent_dir, f"{base_dir}/http-agent")
         if upload_res.returncode != 0:
@@ -565,13 +608,14 @@ def install_agent(
 
         compose_content = _render_agent_compose(registry, resolved_tag)
         if sudo:
-            res = session.run_input_privileged(f"cat > {compose_path}", compose_content, log_label="write docker-compose.yml")
+            res = session.run_input_privileged(f"cat > {compose_path}", compose_content,
+                                               log_label="write docker-compose.yml")
         else:
             res = session.run_input(f"cat > {compose_path}", compose_content, log_label="write docker-compose.yml")
         if res.returncode != 0:
             console.err(res.stderr.strip() or "Failed to write docker-compose.yml.")
             raise typer.Exit(code=2)
-    
+
         env_content = (
             f"AGENT_API_BASE={agent_api_url}\n"
             f"SAHARO_AGENT_INVITE={invite_token}\n"
@@ -591,10 +635,10 @@ def install_agent(
             console.err(res.stderr.strip() or "Failed to set .env permissions.")
             raise typer.Exit(code=2)
 
-    
         _check_remote_api_health(session, agent_api_url, sudo=sudo)
         _cleanup_agent_installation(session, sudo=sudo, allow_existing_state=False)
-        compose_check = session.run("docker compose version >/dev/null 2>&1 && echo docker-compose-plugin || echo docker-compose")
+        compose_check = session.run(
+            "docker compose version >/dev/null 2>&1 && echo docker-compose-plugin || echo docker-compose")
         compose_cmd = "docker compose" if "docker-compose-plugin" in (compose_check.stdout or "") else "docker-compose"
         up_cmd = f"cd {base_dir} && {compose_cmd} up -d --build"
         res = session.run_privileged(up_cmd) if sudo else session.run(up_cmd)
@@ -839,13 +883,13 @@ def _render_wait_line(message: str, dots: str, elapsed: int, timeout_s: int, wid
 
 
 def _wait_for_agent_registration_with_runner(
-    runner,
-    cfg: AppConfig,
-    *,
-    timeout_s: int = REGISTRATION_TIMEOUT_S,
-    poll_interval_s: int = REGISTRATION_POLL_INTERVAL_S,
-    indicator_interval_s: float = WAIT_INDICATOR_INTERVAL_S,
-    emit_output: bool = True,
+        runner,
+        cfg: AppConfig,
+        *,
+        timeout_s: int = REGISTRATION_TIMEOUT_S,
+        poll_interval_s: int = REGISTRATION_POLL_INTERVAL_S,
+        indicator_interval_s: float = WAIT_INDICATOR_INTERVAL_S,
+        emit_output: bool = True,
 ) -> RegistrationResult:
     start = time.time()
     deadline = start + timeout_s
@@ -923,14 +967,14 @@ def _wait_for_agent_registration_with_runner(
 
 
 def _wait_for_agent_registration(
-    session: SSHSession,
-    cfg: AppConfig,
-    *,
-    sudo: bool,
-    timeout_s: int = REGISTRATION_TIMEOUT_S,
-    poll_interval_s: int = REGISTRATION_POLL_INTERVAL_S,
-    indicator_interval_s: float = WAIT_INDICATOR_INTERVAL_S,
-    emit_output: bool = True,
+        session: SSHSession,
+        cfg: AppConfig,
+        *,
+        sudo: bool,
+        timeout_s: int = REGISTRATION_TIMEOUT_S,
+        poll_interval_s: int = REGISTRATION_POLL_INTERVAL_S,
+        indicator_interval_s: float = WAIT_INDICATOR_INTERVAL_S,
+        emit_output: bool = True,
 ) -> RegistrationResult:
     if session.target.dry_run:
         console.info("[dry-run] would wait for agent registration")
@@ -1014,10 +1058,10 @@ def _follow_agent_logs_local() -> None:
 
 
 def _cleanup_agent_installation_with_runner(
-    runner,
-    *,
-    allow_existing_state: bool,
-    label: str = "agent",
+        runner,
+        *,
+        allow_existing_state: bool,
+        label: str = "agent",
 ) -> None:
     res = runner(f"docker ps -a --filter name=^/{AGENT_CONTAINER_NAME}$ -q")
     if res.returncode != 0:
@@ -1048,11 +1092,11 @@ def _cleanup_agent_installation_with_runner(
 
 
 def _cleanup_agent_installation(
-    session: SSHSession,
-    *,
-    sudo: bool,
-    allow_existing_state: bool,
-    label: str = "agent",
+        session: SSHSession,
+        *,
+        sudo: bool,
+        allow_existing_state: bool,
+        label: str = "agent",
 ) -> None:
     if session.target.dry_run:
         console.info(f"[dry-run] would remove existing {label} container")
@@ -1080,19 +1124,19 @@ def _resolve_local_agent_dir(local_path: str | None) -> str:
 
 
 def _handle_registration_result(
-    reg_result: RegistrationResult,
-    *,
-    deployed: bool,
-    timeout_s: int,
-    json_out: bool,
-    show: bool,
-    watch: bool,
-    follow: bool,
-    cfg: AppConfig,
-    follow_local: bool,
-    session: SSHSession | None = None,
-    sudo: bool = False,
-    create_server: bool = False,
+        reg_result: RegistrationResult,
+        *,
+        deployed: bool,
+        timeout_s: int,
+        json_out: bool,
+        show: bool,
+        watch: bool,
+        follow: bool,
+        cfg: AppConfig,
+        follow_local: bool,
+        session: SSHSession | None = None,
+        sudo: bool = False,
+        create_server: bool = False,
 ) -> None:
     if reg_result.timeout_reached or not reg_result.registered:
         if json_out:
@@ -1243,6 +1287,7 @@ def _detect_compose_command_local() -> str:
 
 def _ensure_compose_installed(session: SSHSession, *, sudo: bool = True) -> str:
     """Ensure docker compose exists on remote host and return the command string."""
+
     # helper: run a command with/without sudo
     def _run(cmd: str):
         return session.run_privileged(cmd) if sudo else session.run(cmd)
@@ -1278,7 +1323,6 @@ def _ensure_compose_installed(session: SSHSession, *, sudo: bool = True) -> str:
     )
 
 
-
 def _bootstrap_docker(session: SSHSession, *, ssh_user: str | None = None) -> None:
     """Best-effort docker bootstrap.
 
@@ -1291,6 +1335,7 @@ def _bootstrap_docker(session: SSHSession, *, ssh_user: str | None = None) -> No
         raise RuntimeError(
             "Docker is not installed or not accessible. Install Docker on the target host first."
         )
+
 
 def _render_agent_compose(registry: str, tag: str) -> str:
     agent_image = f"{registry}/saharo/v1/{IMAGE_COMPONENTS['agent']}:{tag}"

@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from typer.testing import CliRunner
-
-from saharo_cli.auth_state import AuthContext
 from saharo_cli import main
+from saharo_cli.auth_state import AuthContext
+from typer.testing import CliRunner
 
 
 def test_settings_group_available(monkeypatch) -> None:

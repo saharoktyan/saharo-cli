@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import typer
-
 from saharo_client import ApiError
 
 from .. import console
@@ -13,8 +12,8 @@ app = typer.Typer(help="Manage portal linking (admin-only).")
 
 @app.command("link", help="Enable or disable portal linking (admin-only).")
 def link(
-    enabled: bool = typer.Option(True, "--enable/--disable", help="Enable or disable portal linking."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override hub API base URL."),
+        enabled: bool = typer.Option(True, "--enable/--disable", help="Enable or disable portal linking."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override hub API base URL."),
 ) -> None:
     cfg = load_config()
     base_url_value = (base_url or cfg.base_url or "").strip()

@@ -5,8 +5,8 @@ from typing import Any
 
 import httpx
 
-from .errors import ApiError, AuthError, NetworkError
 from .config_types import ClientConfig
+from .errors import ApiError, AuthError, NetworkError
 
 
 class Transport:
@@ -26,6 +26,7 @@ class Transport:
             headers=headers,
             follow_redirects=True,
         )
+
     def close(self) -> None:
         self._client.close()
 
@@ -42,7 +43,6 @@ class Transport:
             data = r.json()
         except Exception:
             text = r.text
-
 
         if r.status_code >= 400:
             msg = f"{method} {path} failed with {r.status_code}"

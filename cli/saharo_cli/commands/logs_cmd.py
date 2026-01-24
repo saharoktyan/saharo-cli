@@ -5,8 +5,8 @@ import time
 from typing import Iterable
 
 import typer
-
 from saharo_client import ApiError
+
 from .. import console
 from ..config import load_config
 from ..http import make_client
@@ -61,7 +61,7 @@ def _diff_lines(previous: list[str], current: list[str]) -> list[str]:
     last = previous[-1]
     for idx in range(len(current) - 1, -1, -1):
         if current[idx] == last:
-            return current[idx + 1 :]
+            return current[idx + 1:]
     return current
 
 
@@ -76,8 +76,8 @@ def _print_container_logs(title: str, lines: Iterable[str]) -> None:
 
 @app.command("api", help="Show API logs from local docker container saharo_api.")
 def logs_api(
-    follow: bool = typer.Option(False, "--follow", help="Follow logs."),
-    lines: int = typer.Option(DEFAULT_LINES, "--lines", min=1, help="Number of lines to show."),
+        follow: bool = typer.Option(False, "--follow", help="Follow logs."),
+        lines: int = typer.Option(DEFAULT_LINES, "--lines", min=1, help="Number of lines to show."),
 ):
     if not _docker_available():
         console.err("Docker is unavailable. Install Docker or run on the API host.")
@@ -91,9 +91,9 @@ def logs_api(
 
 @app.command("agent", help="Show logs from a remote runtime via the API.", hidden=True)
 def logs_agent(
-    agent_name_or_id: str = typer.Argument(..., help="Runtime name or numeric id."),
-    follow: bool = typer.Option(False, "--follow", help="Follow logs by polling."),
-    lines: int = typer.Option(DEFAULT_LINES, "--lines", min=1, help="Number of lines to show."),
+        agent_name_or_id: str = typer.Argument(..., help="Runtime name or numeric id."),
+        follow: bool = typer.Option(False, "--follow", help="Follow logs by polling."),
+        lines: int = typer.Option(DEFAULT_LINES, "--lines", min=1, help="Number of lines to show."),
 ):
     cfg = load_config()
     client = make_client(cfg, profile=None, base_url_override=None)
@@ -116,9 +116,9 @@ def logs_agent(
 
 @app.command("server", help="Show logs for server services via the attached runtime.")
 def logs_server(
-    server_name_or_id: str = typer.Argument(..., help="Server name or numeric id."),
-    follow: bool = typer.Option(False, "--follow", help="Follow logs by polling."),
-    lines: int = typer.Option(DEFAULT_LINES, "--lines", min=1, help="Number of lines to show."),
+        server_name_or_id: str = typer.Argument(..., help="Server name or numeric id."),
+        follow: bool = typer.Option(False, "--follow", help="Follow logs by polling."),
+        lines: int = typer.Option(DEFAULT_LINES, "--lines", min=1, help="Number of lines to show."),
 ):
     cfg = load_config()
     client = make_client(cfg, profile=None, base_url_override=None)
@@ -170,13 +170,13 @@ def _resolve_server_id(client, server_name_or_id: str) -> int:
 
 
 def _tail_remote_logs(
-    client,
-    *,
-    agent_id: int,
-    containers: list[str],
-    follow: bool,
-    lines: int,
-    title_prefix: str,
+        client,
+        *,
+        agent_id: int,
+        containers: list[str],
+        follow: bool,
+        lines: int,
+        title_prefix: str,
 ):
     last_lines: dict[str, list[str]] = {c: [] for c in containers}
     while True:

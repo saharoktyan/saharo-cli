@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import typer
 from rich.table import Table
+from saharo_client import ApiError
 
+from .invite_cmd import create_invite
 from .. import console
 from ..config import load_config
 from ..http import make_client
-from saharo_client import ApiError
-from .invite_cmd import create_invite
 
 app = typer.Typer(help="Users commands (admin only).")
 
@@ -52,11 +52,11 @@ def _print_subscription(sub: dict | None) -> None:
 
 @app.command("list")
 def list_users(
-    q: str | None = typer.Option(None, "--q", help="Search by username or telegram_id."),
-    limit: int = typer.Option(50, "--limit", help="Max users to return."),
-    offset: int = typer.Option(0, "--offset", help="Offset for listing."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
-    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+        q: str | None = typer.Option(None, "--q", help="Search by username or telegram_id."),
+        limit: int = typer.Option(50, "--limit", help="Max users to return."),
+        offset: int = typer.Option(0, "--offset", help="Offset for listing."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
     cfg = load_config()
     client = make_client(cfg, profile=None, base_url_override=base_url)
@@ -99,9 +99,9 @@ def list_users(
 
 @app.command("show")
 def show_user(
-    user_id: int | None = typer.Argument(None, help="User ID."),
-    username: str | None = typer.Option(None, "--u", help="Username."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        user_id: int | None = typer.Argument(None, help="User ID."),
+        username: str | None = typer.Option(None, "--u", help="Username."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
 ):
     cfg = load_config()
     client = make_client(cfg, profile=None, base_url_override=base_url)
@@ -135,10 +135,10 @@ def show_user(
 
 @app.command("freeze")
 def freeze_user(
-    user_id: int | None = typer.Argument(None, help="User ID."),
-    username: str | None = typer.Option(None, "--u", help="Username."),
-    reason: str | None = typer.Option(None, "--reason", help="Freeze reason."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        user_id: int | None = typer.Argument(None, help="User ID."),
+        username: str | None = typer.Option(None, "--u", help="Username."),
+        reason: str | None = typer.Option(None, "--reason", help="Freeze reason."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
 ):
     cfg = load_config()
     client = make_client(cfg, profile=None, base_url_override=base_url)
@@ -161,9 +161,9 @@ def freeze_user(
 
 @app.command("unfreeze")
 def unfreeze_user(
-    user_id: int | None = typer.Argument(None, help="User ID."),
-    username: str | None = typer.Option(None, "--u", help="Username."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        user_id: int | None = typer.Argument(None, help="User ID."),
+        username: str | None = typer.Option(None, "--u", help="Username."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
 ):
     cfg = load_config()
     client = make_client(cfg, profile=None, base_url_override=base_url)
@@ -186,10 +186,10 @@ def unfreeze_user(
 
 @app.command("extend")
 def extend_user(
-    user_id: int | None = typer.Argument(None, help="User ID."),
-    username: str | None = typer.Option(None, "--u", help="Username."),
-    days: int = typer.Option(..., "--days", help="Days to extend."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        user_id: int | None = typer.Argument(None, help="User ID."),
+        username: str | None = typer.Option(None, "--u", help="Username."),
+        days: int = typer.Option(..., "--days", help="Days to extend."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
 ):
     cfg = load_config()
     client = make_client(cfg, profile=None, base_url_override=base_url)

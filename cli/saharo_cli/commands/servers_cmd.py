@@ -1,27 +1,28 @@
 from __future__ import annotations
 
+import json
+import math
+import os
+import posixpath
+import shlex
+import time
+from datetime import datetime, timezone
+
 import typer
+from rich import box
+from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
-from rich.panel import Panel
-from rich import box
-from datetime import datetime, timezone
-import math
-import time
-import os
-
-
 from saharo_client import ApiError, AuthError, NetworkError
-from .. import console
-from ..config import load_config, normalize_base_url
-from ..http import make_client
-from ..formatting import format_age, format_list_timestamp
-from ..registry_store import load_registry
-from ..ssh import is_windows
-import json
+
 from . import agents_cmd
 from .host_bootstrap import DEFAULT_REGISTRY, docker_login_ssh, normalize_registry_host
-
+from .. import console
+from ..config import load_config, normalize_base_url
+from ..formatting import format_age, format_list_timestamp
+from ..http import make_client
+from ..registry_store import load_registry
+from ..ssh import is_windows
 
 app = typer.Typer(help="Servers commands.")
 
@@ -35,7 +36,6 @@ SERVICE_PROTOCOL_MAP = {
     "xray": "xray",
     "amnezia-awg": "awg",
 }
-
 
 PROTOCOL_SERVICE_MAP = {
     "awg": "amnezia-awg",
@@ -88,10 +88,47 @@ def _resolve_agent_version_from_host_api(cfg, base_url_override: str | None) -> 
     return agent_tag.strip(), registry_url
 
 
-def _require_registry_activation() -> tuple[str, str, str]:
+def _fetch_registry_creds_from_host_api(
+        cfg,
+        base_url_override: str | None,
+) -> tuple[str, str, str] | None:
+    client = make_client(cfg, profile=None, base_url_override=base_url_override)
+    try:
+        snapshot = client.admin_license_snapshot()
+    except (ApiError, AuthError, NetworkError):
+        return None
+    finally:
+        client.close()
+
+    versions = snapshot.get("versions") if isinstance(snapshot, dict) else None
+    if not isinstance(versions, dict):
+        return None
+    registry = versions.get("registry")
+    if not isinstance(registry, dict):
+        return None
+    registry_url = str(registry.get("url") or "").strip()
+    registry_username = str(registry.get("username") or "").strip()
+    registry_password = registry.get("password")
+    if registry_password is not None and not isinstance(registry_password, str):
+        registry_password = None
+    if not registry_url or not registry_username or not registry_password:
+        return None
+    registry_url = normalize_registry_host(registry_url)
+    if not registry_url:
+        return None
+    return registry_url, registry_username, registry_password
+
+
+def _require_registry_activation(cfg, base_url_override: str | None) -> tuple[str, str, str]:
+    host_creds = _fetch_registry_creds_from_host_api(cfg, base_url_override)
+    if host_creds:
+        return host_creds
     creds = load_registry()
     if not creds or not creds.url or not creds.username or not creds.password:
-        console.err("Registry credentials missing. Run `saharo auth activate` first.")
+        console.err(
+            "Registry credentials missing. Re-run `saharo host bootstrap` with a valid license key, "
+            "or login to the registry on the remote host, or configure registry creds in config.toml."
+        )
         raise typer.Exit(code=2)
     registry_url = normalize_registry_host(creds.url)
     if not registry_url:
@@ -103,14 +140,15 @@ def _require_registry_activation() -> tuple[str, str, str]:
 def _is_registry_auth_error(text: str) -> bool:
     lowered = (text or "").lower()
     return (
-        "unauthorized" in lowered
-        or "authentication required" in lowered
-        or "access denied" in lowered
-        or "requested access to the resource is denied" in lowered
-        or "forbidden" in lowered
-        or "401" in lowered
-        or "403" in lowered
+            "unauthorized" in lowered
+            or "authentication required" in lowered
+            or "access denied" in lowered
+            or "requested access to the resource is denied" in lowered
+            or "forbidden" in lowered
+            or "401" in lowered
+            or "403" in lowered
     )
+
 
 def _protocol_to_service(proto: str) -> str:
     p = (proto or "").strip().lower()
@@ -120,10 +158,12 @@ def _protocol_to_service(proto: str) -> str:
         raise typer.Exit(code=2)
     return svc
 
+
 def _job_status_hint(job_id: int | None) -> str:
     if job_id:
         return f"Check status: saharo jobs get {job_id}"
     return "Check status: saharo jobs list"
+
 
 def _wait_job(client, job_id: int, *, timeout_s: int = 900, interval_s: int = 5) -> dict:
     deadline = time.monotonic() + max(0, int(timeout_s))
@@ -141,6 +181,7 @@ def _wait_job(client, job_id: int, *, timeout_s: int = 900, interval_s: int = 5)
             return job
         time.sleep(max(1, int(interval_s)))
 
+
 def _resolve_server_id_or_exit(client, server_ref: str) -> int:
     try:
         return _resolve_server_id(client, server_ref)
@@ -153,9 +194,9 @@ def _resolve_server_id_or_exit(client, server_ref: str) -> int:
 
 @protocol_app.command("list")
 def protocol_list(
-    server_ref: str = typer.Option(..., "--server", help="Server ID or exact name."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
-    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+        server_ref: str = typer.Option(..., "--server", help="Server ID or exact name."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
     """List protocols registered for a server (what API thinks is installed/available)."""
     cfg = load_config()
@@ -197,14 +238,14 @@ def protocol_list(
 
 @protocol_app.command("bootstrap")
 def protocol_bootstrap(
-    protocol: str = typer.Argument(..., help="Protocol to bootstrap (awg, xray, etc)."),
-    server_ref: str = typer.Option(..., "--server", help="Server ID or exact name."),
-    force: bool = typer.Option(False, "--force", help="Reinstall even if container exists."),
-    wait: bool = typer.Option(True, "--wait/--no-wait", help="Wait for bootstrap job to finish."),
-    wait_timeout: int = typer.Option(900, "--wait-timeout", help="Max seconds to wait for bootstrap."),
-    wait_interval: int = typer.Option(5, "--wait-interval", help="Poll interval in seconds."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
-    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+        protocol: str = typer.Argument(..., help="Protocol to bootstrap (awg, xray, etc)."),
+        server_ref: str = typer.Option(..., "--server", help="Server ID or exact name."),
+        force: bool = typer.Option(False, "--force", help="Reinstall even if container exists."),
+        wait: bool = typer.Option(True, "--wait/--no-wait", help="Wait for bootstrap job to finish."),
+        wait_timeout: int = typer.Option(900, "--wait-timeout", help="Max seconds to wait for bootstrap."),
+        wait_interval: int = typer.Option(5, "--wait-interval", help="Poll interval in seconds."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
     """Bootstrap (install) a protocol on a server."""
     cfg = load_config()
@@ -223,9 +264,11 @@ def protocol_bootstrap(
                 proto_key = SERVICE_PROTOCOL_MAP.get(svc)
                 if proto_key:
                     if status == "succeeded":
-                        client.admin_server_protocol_upsert(server_id, protocol_key=proto_key, status="available", meta={"source": "bootstrap", "service": svc})
+                        client.admin_server_protocol_upsert(server_id, protocol_key=proto_key, status="available",
+                                                            meta={"source": "bootstrap", "service": svc})
                     elif status == "failed":
-                        client.admin_server_protocol_upsert(server_id, protocol_key=proto_key, status="unavailable", meta={"source": "bootstrap", "service": svc})
+                        client.admin_server_protocol_upsert(server_id, protocol_key=proto_key, status="unavailable",
+                                                            meta={"source": "bootstrap", "service": svc})
     except ApiError as e:
         if e.status_code == 404:
             console.err("Server not found.")
@@ -250,13 +293,13 @@ def protocol_bootstrap(
 
 @protocol_app.command("validate")
 def protocol_validate(
-    protocol: str = typer.Argument(..., help="Protocol to validate (awg, xray, etc)."),
-    server_ref: str = typer.Option(..., "--server", help="Server ID or exact name."),
-    wait: bool = typer.Option(True, "--wait/--no-wait", help="Wait for validate job to finish."),
-    wait_timeout: int = typer.Option(300, "--wait-timeout", help="Max seconds to wait for validate."),
-    wait_interval: int = typer.Option(5, "--wait-interval", help="Poll interval in seconds."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
-    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+        protocol: str = typer.Argument(..., help="Protocol to validate (awg, xray, etc)."),
+        server_ref: str = typer.Option(..., "--server", help="Server ID or exact name."),
+        wait: bool = typer.Option(True, "--wait/--no-wait", help="Wait for validate job to finish."),
+        wait_timeout: int = typer.Option(300, "--wait-timeout", help="Max seconds to wait for validate."),
+        wait_interval: int = typer.Option(5, "--wait-interval", help="Poll interval in seconds."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
     """Validate that server-side protocol config matches what API expects."""
     cfg = load_config()
@@ -307,26 +350,27 @@ def protocol_validate(
         console.ok(f"Validate job queued (id={job_id}).")
         console.info(_job_status_hint(job_id))
 
+
 @protocol_awg_app.command("params")
 def protocol_awg_params(
-    server_ref: str = typer.Option(..., "--server", help="Server ID or exact name."),
-    show: bool = typer.Option(False, "--show", help="Show current AWG params for server (no changes)."),
-    jc: str | None = typer.Option(None, "--jc"),
-    jmin: str | None = typer.Option(None, "--jmin"),
-    jmax: str | None = typer.Option(None, "--jmax"),
-    s1: str | None = typer.Option(None, "--s1"),
-    s2: str | None = typer.Option(None, "--s2"),
-    h1: str | None = typer.Option(None, "--h1"),
-    h2: str | None = typer.Option(None, "--h2"),
-    h3: str | None = typer.Option(None, "--h3"),
-    h4: str | None = typer.Option(None, "--h4"),
-    mtu: int | None = typer.Option(None, "--mtu"),
-    apply: bool = typer.Option(False, "--apply", help="Apply config on server after saving."),
-    wait: bool = typer.Option(True, "--wait/--no-wait", help="Wait for apply job to finish."),
-    wait_timeout: int = typer.Option(300, "--wait-timeout", help="Max seconds to wait for apply."),
-    wait_interval: int = typer.Option(5, "--wait-interval", help="Poll interval in seconds."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
-    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+        server_ref: str = typer.Option(..., "--server", help="Server ID or exact name."),
+        show: bool = typer.Option(False, "--show", help="Show current AWG params for server (no changes)."),
+        jc: str | None = typer.Option(None, "--jc"),
+        jmin: str | None = typer.Option(None, "--jmin"),
+        jmax: str | None = typer.Option(None, "--jmax"),
+        s1: str | None = typer.Option(None, "--s1"),
+        s2: str | None = typer.Option(None, "--s2"),
+        h1: str | None = typer.Option(None, "--h1"),
+        h2: str | None = typer.Option(None, "--h2"),
+        h3: str | None = typer.Option(None, "--h3"),
+        h4: str | None = typer.Option(None, "--h4"),
+        mtu: int | None = typer.Option(None, "--mtu"),
+        apply: bool = typer.Option(False, "--apply", help="Apply config on server after saving."),
+        wait: bool = typer.Option(True, "--wait/--no-wait", help="Wait for apply job to finish."),
+        wait_timeout: int = typer.Option(300, "--wait-timeout", help="Max seconds to wait for apply."),
+        wait_interval: int = typer.Option(5, "--wait-interval", help="Poll interval in seconds."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
     """Set AWG AmneziaWG params (J*/S*/H*) and MTU for a server."""
     cfg = load_config()
@@ -335,8 +379,8 @@ def protocol_awg_params(
         server_id = _resolve_server_id_or_exit(client, server_ref)
         if show:
             if apply or any(
-                v is not None
-                for v in (jc, jmin, jmax, s1, s2, h1, h2, h3, h4)
+                    v is not None
+                    for v in (jc, jmin, jmax, s1, s2, h1, h2, h3, h4)
             ) or (mtu is not None):
                 console.err("--show cannot be combined with param flags or --apply.")
                 raise typer.Exit(code=2)
@@ -358,7 +402,6 @@ def protocol_awg_params(
                 table.add_row(k, str(params[k]))
             console.print(table)
             return
-
 
         patch: dict[str, object] = {}
         for k, v in {
@@ -413,6 +456,7 @@ def protocol_awg_params(
     finally:
         client.close()
 
+
 def _age_from_iso(ts: str | None) -> str:
     if not ts:
         return "-"
@@ -423,10 +467,11 @@ def _age_from_iso(ts: str | None) -> str:
         if s < 60:
             return f"{s}s"
         if s < 3600:
-            return f"{s//60}m{s%60:02d}s"
-        return f"{s//3600}h{(s%3600)//60:02d}m"
+            return f"{s // 60}m{s % 60:02d}s"
+        return f"{s // 3600}h{(s % 3600) // 60:02d}m"
     except Exception:
         return "-"
+
 
 def _resolve_server_id(client, server_ref: str) -> int:
     if server_ref.isdigit():
@@ -459,12 +504,12 @@ def _find_server_by_name(client, name: str) -> dict | None:
 
 
 def _create_bootstrap_invite(
-    *,
-    cfg,
-    name: str,
-    note: str | None,
-    expires_minutes: int | None,
-    base_url_override: str | None,
+        *,
+        cfg,
+        name: str,
+        note: str | None,
+        expires_minutes: int | None,
+        base_url_override: str | None,
 ) -> str:
     client = make_client(cfg, profile=None, base_url_override=base_url_override)
     try:
@@ -547,12 +592,12 @@ def _ensure_server_record(client, *, name: str, host: str, agent_id: int, note: 
 
 
 def _wait_for_server_heartbeat(
-    client,
-    server_id: int,
-    *,
-    timeout_s: int,
-    interval_s: int,
-    json_out: bool,
+        client,
+        server_id: int,
+        *,
+        timeout_s: int,
+        interval_s: int,
+        json_out: bool,
 ) -> dict:
     deadline = time.monotonic() + max(0, int(timeout_s))
     last_status = None
@@ -570,13 +615,14 @@ def _wait_for_server_heartbeat(
             return data
         time.sleep(max(1, int(interval_s)))
 
+
 @app.command("list")
 def list_servers(
-    q: str | None = typer.Option(None, "--q", help="Search by name or public_host."),
-    page: int = typer.Option(1, "--page", help="Page number (1-based)."),
-    page_size: int = typer.Option(50, "--page-size", help="Number of servers per page."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
-    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+        q: str | None = typer.Option(None, "--q", help="Search by name or public_host."),
+        page: int = typer.Option(1, "--page", help="Page number (1-based)."),
+        page_size: int = typer.Option(50, "--page-size", help="Number of servers per page."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
     if page < 1:
         console.err("--page must be >= 1.")
@@ -634,12 +680,12 @@ def list_servers(
 
 @app.command("create", hidden=True)
 def create_server(
-    name: str = typer.Option(..., "--name", help="Server name."),
-    host: str = typer.Option(..., "--host", help="Server host (IP or DNS)."),
-    agent_id: int = typer.Option(..., "--agent-id", help="Runtime ID (internal)."),
-    note: str | None = typer.Option(None, "--note", help="Optional note."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
-    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+        name: str = typer.Option(..., "--name", help="Server name."),
+        host: str = typer.Option(..., "--host", help="Server host (IP or DNS)."),
+        agent_id: int = typer.Option(..., "--agent-id", help="Runtime ID (internal)."),
+        note: str | None = typer.Option(None, "--note", help="Optional note."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
     cfg = load_config()
     client = make_client(cfg, profile=None, base_url_override=base_url)
@@ -678,9 +724,9 @@ def create_server(
 
 
 def _show_server_impl(
-    server_ref: str = typer.Argument(..., help="Server ID or exact name."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
-    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+        server_ref: str = typer.Argument(..., help="Server ID or exact name."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
     cfg = load_config()
     client = make_client(cfg, profile=None, base_url_override=base_url)
@@ -720,28 +766,28 @@ def _show_server_impl(
 
 @app.command("get")
 def get_server(
-    server_ref: str = typer.Argument(..., help="Server ID or exact name."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
-    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+        server_ref: str = typer.Argument(..., help="Server ID or exact name."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
     _show_server_impl(server_ref=server_ref, base_url=base_url, json_out=json_out)
 
 
 @app.command("show", hidden=True)
 def show_server(
-    server_ref: str = typer.Argument(..., help="Server ID or exact name."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
-    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+        server_ref: str = typer.Argument(..., help="Server ID or exact name."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
     _show_server_impl(server_ref=server_ref, base_url=base_url, json_out=json_out)
 
 
 @app.command("status")
 def server_status(
-    server_ref: str = typer.Argument(..., help="Server ID or exact name."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
-    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
-    raw: bool = typer.Option(False, "--raw", help="Show raw last_status JSON (debug)."),
+        server_ref: str = typer.Argument(..., help="Server ID or exact name."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+        raw: bool = typer.Option(False, "--raw", help="Show raw last_status JSON (debug)."),
 ):
     cfg = load_config()
     client = make_client(cfg, profile=None, base_url_override=base_url)
@@ -862,9 +908,9 @@ def server_status(
 
 
 def _detach_server_impl(
-    server_ref: str = typer.Argument(..., help="Server ID or exact name."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
-    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+        server_ref: str = typer.Argument(..., help="Server ID or exact name."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
     cfg = load_config()
     client = make_client(cfg, profile=None, base_url_override=base_url)
@@ -891,29 +937,29 @@ def _detach_server_impl(
 
 @app.command("detach")
 def detach_server(
-    server_ref: str = typer.Argument(..., help="Server ID or exact name."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
-    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+        server_ref: str = typer.Argument(..., help="Server ID or exact name."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
     _detach_server_impl(server_ref=server_ref, base_url=base_url, json_out=json_out)
 
 
 @app.command("detach-agent", hidden=True)
 def detach_server_agent(
-    server_ref: str = typer.Argument(..., help="Server ID or exact name."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
-    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+        server_ref: str = typer.Argument(..., help="Server ID or exact name."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
     _detach_server_impl(server_ref=server_ref, base_url=base_url, json_out=json_out)
 
 
 @app.command("delete")
 def delete_server(
-    server_ref: str = typer.Argument(..., help="Server ID or exact name."),
-    force: bool = typer.Option(False, "--force", help="Detach runtime before deleting the server."),
-    yes: bool = typer.Option(False, "--yes", help="Skip confirmation prompt."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
-    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+        server_ref: str = typer.Argument(..., help="Server ID or exact name."),
+        force: bool = typer.Option(False, "--force", help="Detach runtime before deleting the server."),
+        yes: bool = typer.Option(False, "--yes", help="Skip confirmation prompt."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
     cfg = load_config()
     client = make_client(cfg, profile=None, base_url_override=base_url)
@@ -946,39 +992,45 @@ def delete_server(
     console.ok(f"Deleted server {server_id}.")
 
 
-
 @app.command("bootstrap")
 def bootstrap(
-    protocol: str | None = typer.Argument(None, help="Legacy: protocol to bootstrap (awg, xray, etc)."),
-    server_ref: str | None = typer.Option(None, "--server", help="Legacy: server ID or exact name."),
-    name: str | None = typer.Option(None, "--name", help="Server name."),
-    host: str | None = typer.Option(None, "--host", help="Server host (IP or DNS)."),
-    note: str | None = typer.Option(None, "--note", help="Optional note."),
-    invite_expires_minutes: int | None = typer.Option(None, "--invite-expires-minutes", help="Invite expiration in minutes."),
-    ssh_target: str | None = typer.Option(None, "--ssh", help="SSH target in user@host form."),
-    port: int = typer.Option(22, "--port", help="SSH port."),
-    key: str | None = typer.Option(None, "--key", help="SSH private key path."),
-    password: bool = typer.Option(False, "--password", help="Prompt for SSH password."),
-    sudo: bool = typer.Option(False, "--sudo", help="Use sudo -n for privileged commands."),
-    sudo_password: bool = typer.Option(False, "--sudo-password", help="Prompt for sudo password."),
-    no_remote_login: bool = typer.Option(False, "--no-remote-login", help="Skip docker login on the remote host."),
-    with_docker: bool = typer.Option(False, "--with-docker", help="Bootstrap Docker if missing."),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Print actions without executing."),
-    api_url: str | None = typer.Option(None, "--api-url", help="Override API base URL for the runtime."),
-    force_reregister: bool = typer.Option(False, "--force-reregister", help="Force re-register even if state exists."),
-    force: bool = typer.Option(False, "--force", help="Legacy: reinstall protocol even if container exists."),
-    register_timeout: int = typer.Option(agents_cmd.REGISTRATION_TIMEOUT_S, "--register-timeout", help="Registration wait timeout in seconds."),
-    wait: bool = typer.Option(True, "--wait/--no-wait", help="Wait for protocol job completion or server heartbeat."),
-    wait_timeout: int = typer.Option(300, "--wait-timeout", help="Max seconds to wait for completion or heartbeat."),
-    wait_interval: int = typer.Option(5, "--wait-interval", help="Poll interval in seconds."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
-    json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
-    local: bool = typer.Option(False, "--local", help="Install locally using the bundled runtime deploy files."),
-    local_path: str | None = typer.Option(None, "--local-path", help="Path to local runtime deploy directory."),
-    lic_url: str = typer.Option(agents_cmd.DEFAULT_LIC_URL, "--lic-url", help="License API base URL used to resolve versions."),
-    no_license: bool = typer.Option(False, "--no-license", help="Do not query license API for agent version."),
-    agent_version: str | None = typer.Option(None, "--agent-version", help="Exact agent version tag to deploy, e.g. 1.4.1"),
-    registry: str = typer.Option(DEFAULT_REGISTRY, "--registry", help="Container registry for agent images."),
+        protocol: str | None = typer.Argument(None, help="Legacy: protocol to bootstrap (awg, xray, etc)."),
+        server_ref: str | None = typer.Option(None, "--server", help="Legacy: server ID or exact name."),
+        name: str | None = typer.Option(None, "--name", help="Server name."),
+        host: str | None = typer.Option(None, "--host", help="Server host (IP or DNS)."),
+        note: str | None = typer.Option(None, "--note", help="Optional note."),
+        invite_expires_minutes: int | None = typer.Option(None, "--invite-expires-minutes",
+                                                          help="Invite expiration in minutes."),
+        ssh_target: str | None = typer.Option(None, "--ssh", help="SSH target in user@host form."),
+        port: int = typer.Option(22, "--port", help="SSH port."),
+        key: str | None = typer.Option(None, "--key", help="SSH private key path."),
+        password: bool = typer.Option(False, "--password", help="Prompt for SSH password."),
+        sudo: bool = typer.Option(False, "--sudo", help="Use sudo -n for privileged commands."),
+        sudo_password: bool = typer.Option(False, "--sudo-password", help="Prompt for sudo password."),
+        no_remote_login: bool = typer.Option(False, "--no-remote-login", help="Skip docker login on the remote host."),
+        with_docker: bool = typer.Option(False, "--with-docker", help="Bootstrap Docker if missing."),
+        dry_run: bool = typer.Option(False, "--dry-run", help="Print actions without executing."),
+        api_url: str | None = typer.Option(None, "--api-url", help="Override API base URL for the runtime."),
+        force_reregister: bool = typer.Option(False, "--force-reregister",
+                                              help="Force re-register even if state exists."),
+        force: bool = typer.Option(False, "--force", help="Legacy: reinstall protocol even if container exists."),
+        register_timeout: int = typer.Option(agents_cmd.REGISTRATION_TIMEOUT_S, "--register-timeout",
+                                             help="Registration wait timeout in seconds."),
+        wait: bool = typer.Option(True, "--wait/--no-wait",
+                                  help="Wait for protocol job completion or server heartbeat."),
+        wait_timeout: int = typer.Option(300, "--wait-timeout",
+                                         help="Max seconds to wait for completion or heartbeat."),
+        wait_interval: int = typer.Option(5, "--wait-interval", help="Poll interval in seconds."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+        local: bool = typer.Option(False, "--local", help="Install locally using the bundled runtime deploy files."),
+        local_path: str | None = typer.Option(None, "--local-path", help="Path to local runtime deploy directory."),
+        lic_url: str = typer.Option(agents_cmd.DEFAULT_LIC_URL, "--lic-url",
+                                    help="License API base URL used to resolve versions."),
+        no_license: bool = typer.Option(False, "--no-license", help="Do not query license API for agent version."),
+        agent_version: str | None = typer.Option(None, "--agent-version",
+                                                 help="Exact agent version tag to deploy, e.g. 1.4.1"),
+        registry: str = typer.Option(DEFAULT_REGISTRY, "--registry", help="Container registry for agent images."),
 ):
     """Bootstrap a new server runtime and register the server.
 
@@ -1071,7 +1123,7 @@ def bootstrap(
         if agent_id is None:
             agents_cmd._cleanup_agent_installation_local(allow_existing_state=False, label="bootstrap")
             env_path = f"{compose_dir}/.env"
-            registry_url, registry_username, registry_password = _require_registry_activation()
+            registry_url, registry_username, registry_password = _require_registry_activation(cfg, base_url)
             env_content = (
                 f"AGENT_API_BASE={agent_api_url}\n"
                 f"SAHARO_AGENT_INVITE={invite_token}\n"
@@ -1126,9 +1178,12 @@ def bootstrap(
             sudo_password=sudo_pwd,
             dry_run=dry_run,
         )
-        base_dir = "/opt/saharo/agent"
-        compose_path = f"{base_dir}/docker-compose.yml"
-        env_path = f"{base_dir}/.env"
+        base_dir = posixpath.join("/opt", "saharo", "agent")
+        compose_path = posixpath.join(base_dir, "docker-compose.yml")
+        env_path = posixpath.join(base_dir, ".env")
+        base_dir_q = shlex.quote(base_dir)
+        compose_path_q = shlex.quote(compose_path)
+        env_path_q = shlex.quote(env_path)
         ssh_user = ssh_target.split("@", 1)[0] if "@" in ssh_target else ""
 
         session = agents_cmd.SSHSession(target=target, control_path=agents_cmd.build_control_path(dry_run=dry_run))
@@ -1174,17 +1229,26 @@ def bootstrap(
                         console.err(str(e))
                         raise typer.Exit(code=2)
 
-                res = session.run_privileged(f"mkdir -p {base_dir}") if sudo else session.run(f"mkdir -p {base_dir}")
+                res = session.run_privileged(f"mkdir -p {base_dir_q}") if sudo else session.run(
+                    f"mkdir -p {base_dir_q}")
                 if res.returncode != 0:
                     console.err(res.stderr.strip() or "Failed to create remote directory.")
                     raise typer.Exit(code=2)
 
-                registry_url, registry_username, registry_password = _require_registry_activation()
+                registry_url, registry_username, registry_password = _require_registry_activation(cfg, base_url)
                 compose_content = agents_cmd._render_agent_compose(registry, resolved_tag)
                 if sudo:
-                    res = session.run_input_privileged(f"cat > {compose_path}", compose_content, log_label="write docker-compose.yml")
+                    res = session.run_input_privileged(
+                        f"cat > {compose_path_q}",
+                        compose_content,
+                        log_label="write docker-compose.yml",
+                    )
                 else:
-                    res = session.run_input(f"cat > {compose_path}", compose_content, log_label="write docker-compose.yml")
+                    res = session.run_input(
+                        f"cat > {compose_path_q}",
+                        compose_content,
+                        log_label="write docker-compose.yml",
+                    )
                 if res.returncode != 0:
                     console.err(res.stderr.strip() or "Failed to write docker-compose.yml.")
                     raise typer.Exit(code=2)
@@ -1199,20 +1263,21 @@ def bootstrap(
                 if force_reregister:
                     env_content += "SAHARO_AGENT_FORCE_REREGISTER=1\n"
                 if sudo:
-                    res = session.run_input_privileged(f"cat > {env_path}", env_content, log_label="write .env")
+                    res = session.run_input_privileged(f"cat > {env_path_q}", env_content, log_label="write .env")
                 else:
-                    res = session.run_input(f"cat > {env_path}", env_content, log_label="write .env")
+                    res = session.run_input(f"cat > {env_path_q}", env_content, log_label="write .env")
                 if res.returncode != 0:
                     console.err(res.stderr.strip() or "Failed to write .env.")
                     raise typer.Exit(code=2)
-                chmod_cmd = f"chmod 600 {env_path}"
+                chmod_cmd = f"chmod 600 {env_path_q}"
                 res = session.run_privileged(chmod_cmd) if sudo else session.run(chmod_cmd)
                 if res.returncode != 0:
                     console.err(res.stderr.strip() or "Failed to set .env permissions.")
                     raise typer.Exit(code=2)
 
                 agents_cmd._check_remote_api_health(session, agent_api_url, sudo=sudo)
-                agents_cmd._cleanup_agent_installation(session, sudo=sudo, allow_existing_state=False, label="bootstrap")
+                agents_cmd._cleanup_agent_installation(session, sudo=sudo, allow_existing_state=False,
+                                                       label="bootstrap")
 
                 agent_image = f"{registry}/saharo/v1/agent:{resolved_tag}"
                 pull_image_cmd = f"docker pull {agent_image}"
@@ -1244,7 +1309,8 @@ def bootstrap(
                         if retry_pull.returncode != 0:
                             if _is_registry_auth_error(retry_output):
                                 console.err(
-                                    "Remote docker is not authenticated to registry; run saharo auth activate or rerun bootstrap."
+                                    "Remote docker is not authenticated to registry; re-run `saharo host bootstrap` with a valid "
+                                    "license key or login to the registry on the remote host."
                                 )
                             console.err(retry_pull.stderr.strip() or "Failed to pull bootstrap container.")
                             raise typer.Exit(code=2)
@@ -1256,19 +1322,22 @@ def bootstrap(
                         console.err(pre_pull.stderr.strip() or "Failed to pull bootstrap container.")
                         raise typer.Exit(code=2)
 
-                compose_check = session.run("docker compose version >/dev/null 2>&1 && echo docker-compose-plugin || echo docker-compose")
-                compose_cmd = "docker compose" if "docker-compose-plugin" in (compose_check.stdout or "") else "docker-compose"
-                pull_cmd = f"cd {base_dir} && {compose_cmd} pull"
+                compose_check = session.run(
+                    "docker compose version >/dev/null 2>&1 && echo docker-compose-plugin || echo docker-compose")
+                compose_cmd = "docker compose" if "docker-compose-plugin" in (
+                        compose_check.stdout or "") else "docker-compose"
+                pull_cmd = f"cd {base_dir_q} && {compose_cmd} pull"
                 res = session.run_privileged(pull_cmd) if sudo else session.run(pull_cmd)
                 if res.returncode != 0:
                     auth_output = f"{res.stdout or ''}\n{res.stderr or ''}"
                     if _is_registry_auth_error(auth_output):
                         console.err(
-                            "Remote docker is not authenticated to registry; run saharo auth activate or rerun bootstrap."
+                            "Remote docker is not authenticated to registry; re-run `saharo host bootstrap` with a valid "
+                            "license key or login to the registry on the remote host."
                         )
                     console.err(res.stderr.strip() or "Failed to pull bootstrap container.")
                     raise typer.Exit(code=2)
-                up_cmd = f"cd {base_dir} && {compose_cmd} up -d"
+                up_cmd = f"cd {base_dir_q} && {compose_cmd} up -d"
                 res = session.run_privileged(up_cmd) if sudo else session.run(up_cmd)
                 if res.returncode != 0:
                     console.err(res.stderr.strip() or "Failed to start bootstrap container.")

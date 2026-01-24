@@ -7,13 +7,13 @@ from ..config import load_config, save_config, default_config, config_path, norm
 
 
 def init(
-    force: bool = typer.Option(False, "--force", help="Overwrite existing config."),
-    base_url: str = typer.Option(
-        ...,
-        "--base-url",
-        prompt="API base URL",
-        help="Example: https://api.example.com or http://127.0.0.1:8010",
-    ),
+        force: bool = typer.Option(False, "--force", help="Overwrite existing config."),
+        base_url: str = typer.Option(
+            ...,
+            "--base-url",
+            prompt="API base URL",
+            help="Example: https://api.example.com or http://127.0.0.1:8010",
+        ),
 ):
     """
     Initialize local saharo CLI config and set API base URL.
@@ -40,13 +40,13 @@ def init(
 
 
 def init_deprecated(
-    force: bool = typer.Option(False, "--force", help="Overwrite existing config."),
-    base_url: str = typer.Option(
-        ...,
-        "--base-url",
-        prompt="API base URL",
-        help="Example: https://api.example.com or http://127.0.0.1:8010",
-    ),
+        force: bool = typer.Option(False, "--force", help="Overwrite existing config."),
+        base_url: str = typer.Option(
+            ...,
+            "--base-url",
+            prompt="API base URL",
+            help="Example: https://api.example.com or http://127.0.0.1:8010",
+        ),
 ):
     """
     Deprecated: use `saharo settings init`.

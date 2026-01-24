@@ -5,11 +5,10 @@ import tomllib
 from dataclasses import dataclass
 from typing import Any
 
-from platformdirs import user_config_dir
 import tomli_w
+from platformdirs import user_config_dir
 
 from . import console
-
 
 APP_NAME = "saharo"
 CONFIG_FILENAME = "config.toml"
@@ -101,23 +100,23 @@ def ensure_parent_dir(path: str) -> None:
 def to_toml(cfg: AppConfig) -> dict[str, Any]:
     return _prune_none(
         {
-        "base_url": cfg.base_url,
-        "license_api_url": cfg.license_api_url,
-        "auth": {
-            "token": cfg.auth.token,
-            "token_type": cfg.auth.token_type,
-        },
-        "agents": {
-            name: {
-                "agent_id": a.agent_id,
-                "agent_secret": a.agent_secret,
-                "invite_token": a.invite_token,
-                "note": a.note,
-                "created_at": a.created_at,
-                "expires_at": a.expires_at,
-            }
-            for name, a in cfg.agents.items()
-        },
+            "base_url": cfg.base_url,
+            "license_api_url": cfg.license_api_url,
+            "auth": {
+                "token": cfg.auth.token,
+                "token_type": cfg.auth.token_type,
+            },
+            "agents": {
+                name: {
+                    "agent_id": a.agent_id,
+                    "agent_secret": a.agent_secret,
+                    "invite_token": a.invite_token,
+                    "note": a.note,
+                    "created_at": a.created_at,
+                    "expires_at": a.expires_at,
+                }
+                for name, a in cfg.agents.items()
+            },
         }
     )
 

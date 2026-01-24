@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import zlib
+
 import typer
 
 from .. import console
@@ -10,9 +11,7 @@ from ..config import load_config, save_config, normalize_base_url
 from ..http import make_client
 from ..keys import load_or_create_awg_keypair, awg_key_dir
 
-
 app = typer.Typer(help="Fetch VPN client config (server/protocol).")
-
 
 AWG_AMNEZIA_KEYMAP = {
     "jc": "Jc",
@@ -27,7 +26,6 @@ AWG_AMNEZIA_KEYMAP = {
 }
 
 
-
 def _show_config_impl() -> None:
     cfg = load_config()
     token_state = "(set)" if cfg.auth.token else "(empty)"
@@ -35,7 +33,7 @@ def _show_config_impl() -> None:
 
 
 def _set_config_value_impl(
-    base_url: str | None = None,
+        base_url: str | None = None,
 ) -> None:
     cfg = load_config()
 
@@ -45,17 +43,18 @@ def _set_config_value_impl(
     save_config(cfg)
     console.ok("Config updated.")
 
+
 def _default_device_label() -> str:
     import socket
     return socket.gethostname() or "device"
 
 
 def _default_output_path(
-    protocol: str,
-    server_id: int,
-    device_label: str,
-    *,
-    awg_conf: bool = False,
+        protocol: str,
+        server_id: int,
+        device_label: str,
+        *,
+        awg_conf: bool = False,
 ) -> str:
     import os
     from platformdirs import user_config_dir
@@ -293,18 +292,18 @@ def _build_awg_uri(*, private_key: str, public_key: str, wg_parts: dict, name: s
 
 @app.command("get")
 def get_config(
-    server: str = typer.Option(..., "--server", help="Server ID or name."),
-    protocol: str = typer.Option(..., "--protocol", help="Protocol (awg, xray, etc)."),
-    route: str | None = typer.Option(
-        None,
-        "--route",
-        help="Route for xray (tcp/xhttp). Default is server default (tcp).",
-    ),
-    device: str | None = typer.Option(None, "--device", help="Device label."),
-    out: str | None = typer.Option(None, "--out", help="Output path for config."),
-    conf: bool = typer.Option(False, "--conf", help="Output raw WireGuard config (AWG only)."),
-    quiet: bool = typer.Option(False, "--quiet", help="Suppress config output to stdout."),
-    base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        server: str = typer.Option(..., "--server", help="Server ID or name."),
+        protocol: str = typer.Option(..., "--protocol", help="Protocol (awg, xray, etc)."),
+        route: str | None = typer.Option(
+            None,
+            "--route",
+            help="Route for xray (tcp/xhttp). Default is server default (tcp).",
+        ),
+        device: str | None = typer.Option(None, "--device", help="Device label."),
+        out: str | None = typer.Option(None, "--out", help="Output path for config."),
+        conf: bool = typer.Option(False, "--conf", help="Output raw WireGuard config (AWG only)."),
+        quiet: bool = typer.Option(False, "--quiet", help="Suppress config output to stdout."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
 ):
     """
     Fetch VPN client config for a server/protocol you have access to.
@@ -406,4 +405,4 @@ def get_config(
             console.console.print("")
             console.console.print(str(content), markup=False)
 
-#wqeqweqweqweqwe
+# wqeqweqweqweqwe

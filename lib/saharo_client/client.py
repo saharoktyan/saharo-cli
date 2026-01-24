@@ -1,25 +1,23 @@
 from __future__ import annotations
 
 from typing import Any
-
 from urllib.parse import urlencode
 
 from .config_types import ClientConfig
-from .transport import Transport
 from .errors import ApiError
+from .transport import Transport
 
 
 class SaharoClient:
     def __init__(self, cfg: ClientConfig):
         self._t = Transport(cfg)
 
-
     def _request_json(
-        self,
-        method: str,
-        path: str,
-        *,
-        json_body: dict | None = None,
+            self,
+            method: str,
+            path: str,
+            *,
+            json_body: dict | None = None,
     ):
         """Internal helper for endpoints that should return JSON."""
         data = self._t.request(method, path, json_body=json_body)
@@ -49,7 +47,8 @@ class SaharoClient:
                 return token
         raise ApiError(500, "auth api-key returned no token", None)
 
-    def admin_users_list(self, *, q: str | None = None, limit: int | None = None, offset: int | None = None) -> dict[str, Any]:
+    def admin_users_list(self, *, q: str | None = None, limit: int | None = None, offset: int | None = None) -> dict[
+        str, Any]:
         params: dict[str, Any] = {}
         if q:
             params["q"] = q
@@ -96,14 +95,14 @@ class SaharoClient:
         return data if isinstance(data, dict) else {"items": data}
 
     def admin_grant_create(
-        self,
-        *,
-        user_id: int,
-        server_id: int,
-        protocol_id: int,
-        route: str | None = None,
-        device_limit: int | None = None,
-        note: str | None = None,
+            self,
+            *,
+            user_id: int,
+            server_id: int,
+            protocol_id: int,
+            route: str | None = None,
+            device_limit: int | None = None,
+            note: str | None = None,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {
             "server_id": int(server_id),
@@ -138,7 +137,8 @@ class SaharoClient:
         data = self._t.request("POST", "/admin/license/sync")
         return data if isinstance(data, dict) else {"raw": data}
 
-    def admin_servers_list(self, *, q: str | None = None, limit: int | None = None, offset: int | None = None) -> dict[str, Any]:
+    def admin_servers_list(self, *, q: str | None = None, limit: int | None = None, offset: int | None = None) -> dict[
+        str, Any]:
         params: dict[str, Any] = {}
         if q:
             params["q"] = q
@@ -168,7 +168,8 @@ class SaharoClient:
         data = self._t.request("DELETE", f"/admin/servers/{server_id}{query}")
         return data if isinstance(data, dict) else {"raw": data}
 
-    def admin_agent_invite_create(self, *, name: str, note: str | None = None, expires_minutes: int | None = None) -> dict[str, Any]:
+    def admin_agent_invite_create(self, *, name: str, note: str | None = None, expires_minutes: int | None = None) -> \
+            dict[str, Any]:
         body: dict[str, Any] = {"name": name, "note": note}
         if expires_minutes is not None:
             body["ttl_seconds"] = int(expires_minutes) * 60
@@ -181,11 +182,11 @@ class SaharoClient:
         return data if isinstance(data, dict) else {"raw": data}
 
     def admin_agents_list(
-        self,
-        *,
-        include_deleted: bool = False,
-        limit: int | None = None,
-        offset: int | None = None,
+            self,
+            *,
+            include_deleted: bool = False,
+            limit: int | None = None,
+            offset: int | None = None,
     ) -> dict[str, Any]:
         params: dict[str, Any] = {}
         if include_deleted:
@@ -230,13 +231,13 @@ class SaharoClient:
         return data if isinstance(data, dict) else {"raw": data}
 
     def admin_jobs_cleanup(
-        self,
-        *,
-        older_than_days: int | None = None,
-        status: str | None = None,
-        server_id: int | None = None,
-        agent_id: int | None = None,
-        dry_run: bool = False,
+            self,
+            *,
+            older_than_days: int | None = None,
+            status: str | None = None,
+            server_id: int | None = None,
+            agent_id: int | None = None,
+            dry_run: bool = False,
     ) -> dict[str, Any]:
         params: dict[str, Any] = {"dry-run": "true" if dry_run else "false"}
         if older_than_days is not None:
@@ -252,7 +253,8 @@ class SaharoClient:
         data = self._t.request("DELETE", path)
         return data if isinstance(data, dict) else {"raw": data}
 
-    def admin_job_create(self, *, server_id: int | None, agent_id: int | None, job_type: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def admin_job_create(self, *, server_id: int | None, agent_id: int | None, job_type: str,
+                         payload: dict[str, Any]) -> dict[str, Any]:
         body: dict[str, Any] = {"type": job_type, "payload": payload}
         if server_id is not None:
             body["server_id"] = int(server_id)
@@ -262,13 +264,13 @@ class SaharoClient:
         return data if isinstance(data, dict) else {"raw": data}
 
     def admin_jobs_list(
-        self,
-        *,
-        status: str | None = None,
-        agent_id: int | None = None,
-        server_id: int | None = None,
-        limit: int | None = None,
-        offset: int | None = None,
+            self,
+            *,
+            status: str | None = None,
+            agent_id: int | None = None,
+            server_id: int | None = None,
+            limit: int | None = None,
+            offset: int | None = None,
     ) -> dict[str, Any]:
         params: dict[str, Any] = {}
         if status:
@@ -287,12 +289,12 @@ class SaharoClient:
         return data if isinstance(data, dict) else {"items": data}
 
     def admin_server_create(
-        self,
-        *,
-        name: str,
-        host: str,
-        agent_id: int,
-        note: str | None = None,
+            self,
+            *,
+            name: str,
+            host: str,
+            agent_id: int,
+            note: str | None = None,
     ) -> dict[str, Any]:
         body = {"name": name, "host": host, "agent_id": agent_id, "note": note}
         data = self._t.request("POST", "/admin/servers", json_body=body)
@@ -308,30 +310,31 @@ class SaharoClient:
         return data if isinstance(data, list) else []
 
     def admin_server_protocol_upsert(
-        self,
-        server_id: int,
-        *,
-        protocol_key: str,
-        status: str | None = None,
-        meta: dict[str, Any] | None = None,
+            self,
+            server_id: int,
+            *,
+            protocol_key: str,
+            status: str | None = None,
+            meta: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         body = {"protocol_key": protocol_key, "status": status, "meta": meta}
         data = self._t.request("POST", f"/admin/servers/{server_id}/protocols", json_body=body)
         return data if isinstance(data, dict) else {"raw": data}
 
     def admin_server_protocol_patch(
-        self,
-        server_id: int,
-        *,
-        protocol_key: str,
-        status: str | None = None,
+            self,
+            server_id: int,
+            *,
+            protocol_key: str,
+            status: str | None = None,
     ) -> dict[str, Any]:
         body = {"status": status}
         data = self._t.request("PATCH", f"/admin/servers/{server_id}/protocols/{protocol_key}", json_body=body)
         return data if isinstance(data, dict) else {"raw": data}
 
     def admin_server_protocol_apply(self, server_id: int, *, protocol_key: str) -> dict[str, Any]:
-        data = self._t.request("POST", f"/admin/servers/{server_id}/protocols/{protocol_key}/apply-config", json_body={})
+        data = self._t.request("POST", f"/admin/servers/{server_id}/protocols/{protocol_key}/apply-config",
+                               json_body={})
         return data if isinstance(data, dict) else {"raw": data}
 
     def admin_server_protocol_validate(self, server_id: int, *, protocol_key: str) -> dict[str, Any]:
@@ -345,14 +348,15 @@ class SaharoClient:
     def admin_job_cancel(self, job_id: int) -> dict[str, Any]:
         data = self._t.request("POST", f"/admin/jobs/{job_id}/cancel")
         return data if isinstance(data, dict) else {"raw": data}
+
     def invites_create(
-        self,
-        *,
-        duration_days: int | None = None,
-        perpetual: bool = False,
-        note: str | None = None,
-        max_uses: int = 1,
-        expires_in_days: int | None = 30,
+            self,
+            *,
+            duration_days: int | None = None,
+            perpetual: bool = False,
+            note: str | None = None,
+            max_uses: int = 1,
+            expires_in_days: int | None = 30,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {
             "perpetual": bool(perpetual),
@@ -371,13 +375,13 @@ class SaharoClient:
         return data if isinstance(data, list) else (data.get("items") if isinstance(data, dict) else [])
 
     def invites_claim_local(
-        self,
-        *,
-        token: str,
-        username: str,
-        password: str,
-        device_label: str,
-        platform: str | None = None,
+            self,
+            *,
+            token: str,
+            username: str,
+            password: str,
+            device_label: str,
+            platform: str | None = None,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {
             "token": token,
@@ -388,7 +392,6 @@ class SaharoClient:
         }
         data = self._t.request("POST", "/invites/claim-local", json_body=body)
         return data if isinstance(data, dict) else {"raw": data}
-
 
     def health(self) -> dict[str, Any]:
         # expected /health response: {"status":"ok", ...}
@@ -411,13 +414,13 @@ class SaharoClient:
         return self._t.request("POST", f"/servers/{server_id}/agent", json_body={"agent_id": agent_id})
 
     def credentials_ensure(
-        self,
-        *,
-        server_id: int,
-        protocol: str,
-        device_label: str,
-        route: str | None = None,
-        client_public_key: str | None = None,
+            self,
+            *,
+            server_id: int,
+            protocol: str,
+            device_label: str,
+            route: str | None = None,
+            client_public_key: str | None = None,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {
             "server_id": int(server_id),

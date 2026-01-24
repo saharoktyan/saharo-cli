@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from typer.testing import CliRunner
-
 from saharo_cli import main
 from saharo_cli.auth_state import AuthContext
 from saharo_cli.commands import jobs_cmd
+from typer.testing import CliRunner
 
 
 class _DummyClient:

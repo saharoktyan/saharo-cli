@@ -53,7 +53,8 @@ class _FakeClient:
     def admin_job_get(self, job_id: int) -> dict:
         return {"id": job_id, **self.job_response}
 
-    def admin_server_protocol_upsert(self, server_id: int, *, protocol_key: str, status: str | None = None, meta=None) -> dict:
+    def admin_server_protocol_upsert(self, server_id: int, *, protocol_key: str, status: str | None = None,
+                                     meta=None) -> dict:
         payload = {
             "server_id": server_id,
             "protocol_key": protocol_key,

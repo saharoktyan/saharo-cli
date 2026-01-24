@@ -10,6 +10,7 @@ import urllib.parse
 from dataclasses import dataclass
 
 import typer
+
 from .. import console
 from ..ssh import SSHSession, SshTarget, build_control_path, is_windows
 
@@ -69,12 +70,12 @@ class ExecContext:
             raise
 
     def run_input(
-        self,
-        command: str,
-        content: str,
-        *,
-        log_label: str,
-        sudo: bool | None = None,
+            self,
+            command: str,
+            content: str,
+            *,
+            log_label: str,
+            sudo: bool | None = None,
     ) -> subprocess.CompletedProcess:
         use_sudo = self.allow_sudo if sudo is None else sudo
         if use_sudo and not self.allow_sudo:
@@ -159,13 +160,13 @@ def _self_check_sudo_policy() -> None:
 
 
 def ensure_https(
-    domain: str,
-    email: str,
-    api_port: int,
-    *,
-    http01: bool = True,
-    ssh_session: SSHSession | None = None,
-    allow_sudo: bool = False,
+        domain: str,
+        email: str,
+        api_port: int,
+        *,
+        http01: bool = True,
+        ssh_session: SSHSession | None = None,
+        allow_sudo: bool = False,
 ) -> None:
     clean_domain = normalize_domain(domain)
     if "@" not in (email or ""):
@@ -207,17 +208,18 @@ def ensure_https(
 
 @app.command("setup")
 def https_setup(
-    domain: str = typer.Option(..., "--domain", help="Domain for HTTPS (e.g. api.example.com)."),
-    email: str = typer.Option(..., "--email", help="Email for Let's Encrypt registration."),
-    api_port: int = typer.Option(
-        DEFAULT_API_PORT,
-        "--api-port",
-        help="Local API port to proxy (default: 8010).",
-    ),
-    ssh_host: str | None = typer.Option(None, "--ssh-host", help="SSH target in user@host form."),
-    ssh_port: int = typer.Option(22, "--ssh-port", help="SSH port."),
-    ssh_key: str | None = typer.Option(None, "--ssh-key", help="SSH private key path."),
-    ssh_sudo: bool = typer.Option(True, "--ssh-sudo/--no-ssh-sudo", help="Use sudo over SSH for privileged commands."),
+        domain: str = typer.Option(..., "--domain", help="Domain for HTTPS (e.g. api.example.com)."),
+        email: str = typer.Option(..., "--email", help="Email for Let's Encrypt registration."),
+        api_port: int = typer.Option(
+            DEFAULT_API_PORT,
+            "--api-port",
+            help="Local API port to proxy (default: 8010).",
+        ),
+        ssh_host: str | None = typer.Option(None, "--ssh-host", help="SSH target in user@host form."),
+        ssh_port: int = typer.Option(22, "--ssh-port", help="SSH port."),
+        ssh_key: str | None = typer.Option(None, "--ssh-key", help="SSH private key path."),
+        ssh_sudo: bool = typer.Option(True, "--ssh-sudo/--no-ssh-sudo",
+                                      help="Use sudo over SSH for privileged commands."),
 ):
     """Install Nginx + Let's Encrypt for the host API.
 
@@ -263,14 +265,14 @@ def https_setup(
 
 
 def _https_setup_remote(
-    *,
-    ssh_host: str,
-    ssh_port: int,
-    ssh_key: str | None,
-    ssh_sudo: bool,
-    domain: str,
-    email: str,
-    api_port: int,
+        *,
+        ssh_host: str,
+        ssh_port: int,
+        ssh_key: str | None,
+        ssh_sudo: bool,
+        domain: str,
+        email: str,
+        api_port: int,
 ) -> None:
     ssh_password = None
     if not ssh_key:
@@ -361,12 +363,12 @@ def _remote_run(session: SSHSession, command: str, *, sudo: bool) -> subprocess.
 
 
 def _remote_run_input(
-    session: SSHSession,
-    command: str,
-    content: str,
-    *,
-    log_label: str,
-    sudo: bool,
+        session: SSHSession,
+        command: str,
+        content: str,
+        *,
+        log_label: str,
+        sudo: bool,
 ) -> subprocess.CompletedProcess:
     if sudo:
         return session.run_input_privileged(command, content, log_label=log_label)
