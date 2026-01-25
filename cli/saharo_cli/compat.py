@@ -4,7 +4,8 @@ import os
 from importlib import metadata
 from typing import Any
 
-import httpx
+from saharo_client import ApiError, NetworkError, SaharoClient
+from saharo_client.config_types import ClientConfig
 
 from .console import err, warn
 from .semver import is_version_in_range
@@ -33,16 +34,17 @@ def ensure_hub_compatibility(base_url: str, *, warn_only: bool = False) -> dict[
     if base_url in _CHECK_CACHE:
         return _CHECK_CACHE[base_url]
 
-    url = f"{base_url}/version"
     try:
-        resp = httpx.get(url, timeout=5.0)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as exc:
-        warn(f"Compatibility check skipped: failed to reach {url} ({exc})")
+        client = SaharoClient(ClientConfig(base_url=base_url, token=None, client_version=None, client_protocol=None))
+        try:
+            data = client.version()
+        finally:
+            client.close()
+    except (ApiError, NetworkError) as exc:
+        warn(f"Compatibility check skipped: failed to reach {base_url}/version ({exc})")
         return None
 
-    if not isinstance(data, dict):
+    if not isinstance(data, dict) or (len(data) == 1 and "raw" in data):
         warn("Compatibility check skipped: invalid /version response.")
         return None
 

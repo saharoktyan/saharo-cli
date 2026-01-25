@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 
 import httpx
 import typer
+from saharo_client import ApiError, NetworkError, SaharoClient
+from saharo_client.config_types import ClientConfig
 
 from ..compat import cli_protocol, cli_version
 from ..config import load_config, resolve_license_api_url
@@ -68,54 +70,58 @@ def health(
         _emit("warn", "Base URL is not configured. Run `saharo settings set base_url ...` first.",
               json_mode=json_output)
     else:
-        endpoint = f"{base_url.rstrip('/')}/version"
         try:
-            resp = httpx.get(endpoint, timeout=5.0)
-            if resp.status_code != 200:
-                hub_errors.append(f"hub_version_http_{resp.status_code}")
-                _emit("warn", f"Hub /version check failed ({resp.status_code}).", json_mode=json_output)
-            else:
-                data = resp.json()
-                api_protocol = data.get("api_protocol")
-                supported_range = str(data.get("supported_cli_range") or "").strip()
-                api_version = str(data.get("api_version") or data.get("version") or "").strip()
-                hub.update(
-                    {
-                        "api_version": api_version or None,
-                        "api_protocol": api_protocol,
-                        "supported_cli_range": supported_range or None,
-                    }
+            endpoint = f"{base_url.rstrip('/')}/version"
+            client = SaharoClient(ClientConfig(base_url=base_url, token=None, client_version=None, client_protocol=None))
+            try:
+                data = client.version()
+            finally:
+                client.close()
+            if not isinstance(data, dict) or (len(data) == 1 and "raw" in data):
+                raise ValueError("invalid /version response")
+            api_protocol = data.get("api_protocol")
+            supported_range = str(data.get("supported_cli_range") or "").strip()
+            api_version = str(data.get("api_version") or data.get("version") or "").strip()
+            hub.update(
+                {
+                    "api_version": api_version or None,
+                    "api_protocol": api_protocol,
+                    "supported_cli_range": supported_range or None,
+                }
+            )
+            incompatible = False
+            if api_protocol is not None and int(api_protocol) != int(current_protocol):
+                hub_errors.append("cli_protocol_incompatible")
+                incompatible = True
+                _emit(
+                    "err",
+                    f"Incompatible CLI protocol: requires {api_protocol}, current {current_protocol}.",
+                    json_mode=json_output,
                 )
-                incompatible = False
-                if api_protocol is not None and int(api_protocol) != int(current_protocol):
-                    hub_errors.append("cli_protocol_incompatible")
-                    incompatible = True
-                    _emit(
-                        "err",
-                        f"Incompatible CLI protocol: requires {api_protocol}, current {current_protocol}.",
-                        json_mode=json_output,
-                    )
-                if supported_range and not is_version_in_range(current_version, supported_range):
-                    hub_errors.append("cli_version_incompatible")
-                    incompatible = True
-                    _emit(
-                        "err",
-                        f"Incompatible CLI version: requires {supported_range}, current {current_version}.",
-                        json_mode=json_output,
-                    )
-                if not incompatible:
-                    _emit("ok", "Hub API compatibility check passed.", json_mode=json_output)
-                if verbose and not json_output:
-                    _emit(
-                        "info",
-                        f"Hub /version: api_version={api_version} api_protocol={api_protocol} "
-                        f"supported_cli_range={supported_range}",
-                        json_mode=json_output,
-                    )
-                if verbose:
-                    hub["endpoint"] = endpoint
-                hub["ok"] = not incompatible
-        except Exception as exc:
+            if supported_range and not is_version_in_range(current_version, supported_range):
+                hub_errors.append("cli_version_incompatible")
+                incompatible = True
+                _emit(
+                    "err",
+                    f"Incompatible CLI version: requires {supported_range}, current {current_version}.",
+                    json_mode=json_output,
+                )
+            if not incompatible:
+                _emit("ok", "Hub API compatibility check passed.", json_mode=json_output)
+            if verbose and not json_output:
+                _emit(
+                    "info",
+                    f"Hub /version: api_version={api_version} api_protocol={api_protocol} "
+                    f"supported_cli_range={supported_range}",
+                    json_mode=json_output,
+                )
+            if verbose:
+                hub["endpoint"] = endpoint
+            hub["ok"] = not incompatible
+        except ApiError as exc:
+            hub_errors.append(f"hub_version_http_{exc.status_code}")
+            _emit("warn", f"Hub /version check failed ({exc.status_code}).", json_mode=json_output)
+        except (NetworkError, Exception) as exc:
             hub_errors.append("hub_version_request_failed")
             _emit("warn", f"Hub /version check failed: {exc}", json_mode=json_output)
 
