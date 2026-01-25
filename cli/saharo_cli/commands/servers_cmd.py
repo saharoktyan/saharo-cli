@@ -21,7 +21,6 @@ from .. import console
 from ..config import load_config, normalize_base_url
 from ..formatting import format_age, format_list_timestamp
 from ..http import make_client
-from ..registry_store import load_registry
 from ..ssh import is_windows
 
 app = typer.Typer(help="Servers commands.")
@@ -123,18 +122,11 @@ def _require_registry_activation(cfg, base_url_override: str | None) -> tuple[st
     host_creds = _fetch_registry_creds_from_host_api(cfg, base_url_override)
     if host_creds:
         return host_creds
-    creds = load_registry()
-    if not creds or not creds.url or not creds.username or not creds.password:
-        console.err(
-            "Registry credentials missing. Re-run `saharo host bootstrap` with a valid license key, "
-            "or login to the registry on the remote host, or configure registry creds in config.toml."
-        )
-        raise typer.Exit(code=2)
-    registry_url = normalize_registry_host(creds.url)
-    if not registry_url:
-        console.err("Registry URL is missing or invalid.")
-        raise typer.Exit(code=2)
-    return registry_url, creds.username, creds.password
+    console.err(
+        "Registry credentials are unavailable from the host API. "
+        "Re-run `saharo host bootstrap` with a valid license key or restore host licensing."
+    )
+    raise typer.Exit(code=2)
 
 
 def _is_registry_auth_error(text: str) -> bool:
