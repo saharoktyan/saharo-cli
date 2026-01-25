@@ -14,7 +14,7 @@ class AuthContext:
     role: str | None = None
 
 
-def resolve_auth_context() -> AuthContext:
+def resolve_auth_context(*, check_remote: bool = True) -> AuthContext:
     import os
 
     if not os.path.exists(config_path()):
@@ -28,13 +28,16 @@ def resolve_auth_context() -> AuthContext:
     if not token:
         return AuthContext(state="no_token")
 
+    if not check_remote:
+        return AuthContext(state="token_present")
+
     client = make_client(cfg, profile=None, base_url_override=None)
     try:
         data = client._t.request("GET", "/me")
     except AuthError:
         return AuthContext(state="invalid_token")
     except (ApiError, NetworkError):
-        return AuthContext(state="invalid_token")
+        return AuthContext(state="token_unverified")
     finally:
         client.close()
 
