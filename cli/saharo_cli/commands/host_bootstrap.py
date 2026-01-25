@@ -1279,7 +1279,11 @@ def _build_license_snapshot_payload(license_key: str, activation: _RegistryActiv
     resolved_versions = activation.resolved_versions or {"host": activation.resolved_host_tag}
     versions_json: dict[str, object] = {"resolved_versions": resolved_versions}
     if activation.registry_url:
-        versions_json["registry"] = {"url": activation.registry_url}
+        versions_json["registry"] = {
+            "url": activation.registry_url,
+            "username": activation.registry_username,
+            "password": activation.registry_password,
+        }
     return {
         "license_key": license_key,
         "entitlements_json": activation.entitlements_json or {},

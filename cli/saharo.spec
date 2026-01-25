@@ -1,4 +1,5 @@
-﻿# -*- mode: python ; coding: utf-8 -*-
+﻿
+# -*- mode: python ; coding: utf-8 -*-
 
 from pathlib import Path
 import sys
