@@ -21,7 +21,7 @@ def _build_app() -> typer.Typer:
         no_args_is_help=True,
     )
 
-    ctx = resolve_auth_context()
+    ctx = resolve_auth_context(check_remote=False)
 
     # Always available
     app.add_typer(settings_cmd.app, name="settings")
@@ -45,8 +45,8 @@ def _build_app() -> typer.Typer:
         # Health is available to all authenticated users
         app.add_typer(health_app, name="")
 
-        # Admin-only apps
-        if ctx.role == "admin":
+        # Admin-only apps (also allow when auth cannot be verified yet)
+        if ctx.role == "admin" or ctx.state in {"token_present", "token_unverified"}:
             app.add_typer(servers_app, name="servers")
             app.add_typer(jobs_app, name="jobs")
             app.add_typer(users_app, name="users")

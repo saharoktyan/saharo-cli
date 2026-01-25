@@ -6,7 +6,7 @@ from typer.testing import CliRunner
 
 
 def test_settings_group_available(monkeypatch) -> None:
-    monkeypatch.setattr(main, "resolve_auth_context", lambda: AuthContext(state="authed", role="user"))
+    monkeypatch.setattr(main, "resolve_auth_context", lambda **_: AuthContext(state="authed", role="user"))
     app = main._build_app()
     runner = CliRunner()
     result = runner.invoke(app, ["--help"])

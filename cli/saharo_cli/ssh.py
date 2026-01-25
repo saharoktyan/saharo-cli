@@ -41,17 +41,17 @@ class SSHSession:
             return
         if not self._control_master_enabled:
             cmd = self._ssh_base_cmd(control_master=False) + [self.target.host, "true"]
-            res = subprocess.run(cmd, text=True, capture_output=True)
+            res = subprocess.run(cmd, text=True, capture_output=True, env=_ssh_env(self.target.password))
             if res.returncode != 0:
                 raise RuntimeError(res.stderr.strip() or "Failed to establish SSH connection")
             return
         cmd = self._ssh_base_cmd(control_master=True) + [self.target.host, "true"]
-        res = subprocess.run(cmd, text=True, capture_output=True)
+        res = subprocess.run(cmd, text=True, capture_output=True, env=_ssh_env(self.target.password))
         if res.returncode != 0:
             if _is_control_master_unsupported(_decode_stderr(res.stderr or res.stdout)):
                 self._control_master_enabled = False
                 cmd = self._ssh_base_cmd(control_master=False) + [self.target.host, "true"]
-                res = subprocess.run(cmd, text=True, capture_output=True)
+                res = subprocess.run(cmd, text=True, capture_output=True, env=_ssh_env(self.target.password))
                 if res.returncode != 0:
                     raise RuntimeError(res.stderr.strip() or "Failed to establish SSH connection")
                 return
@@ -66,7 +66,7 @@ class SSHSession:
             return
         try:
             cmd = self._ssh_base_cmd(control_master=False) + ["-O", "exit", self.target.host]
-            subprocess.run(cmd, text=True, capture_output=True)
+            subprocess.run(cmd, text=True, capture_output=True, env=_ssh_env(self.target.password))
         except Exception:
             return
 
@@ -76,7 +76,14 @@ class SSHSession:
             console.info(f"[dry-run] ssh {self.target.host}: {remote_cmd}")
             return subprocess.CompletedProcess([], 0, "", "")
         cmd = self._ssh_base_cmd(control_master=False) + [self.target.host, remote_cmd]
-        return subprocess.run(cmd, text=True, capture_output=True, encoding="utf-8", errors="replace")
+        return subprocess.run(
+            cmd,
+            text=True,
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            env=_ssh_env(self.target.password),
+        )
 
     def run_input(
             self,
@@ -91,7 +98,7 @@ class SSHSession:
             console.info(f"[dry-run] ssh {self.target.host}: {log_label}")
             return subprocess.CompletedProcess([], 0, "", "")
         cmd = self._ssh_base_cmd(control_master=False) + [self.target.host, remote_cmd]
-        return subprocess.run(cmd, text=True, input=content, capture_output=True)
+        return subprocess.run(cmd, text=True, input=content, capture_output=True, env=_ssh_env(self.target.password))
 
     def run_privileged(self, command: str, *, cwd: str | None = None) -> subprocess.CompletedProcess:
         _ensure_sudo_mode(self.target)
@@ -101,8 +108,21 @@ class SSHSession:
             return subprocess.CompletedProcess([], 0, "", "")
         cmd = self._ssh_base_cmd(control_master=False) + [self.target.host, sudo_cmd]
         if self.target.sudo_mode == "password":
-            return subprocess.run(cmd, text=True, input=f"{self.target.sudo_password}\n", capture_output=True)
-        return subprocess.run(cmd, text=True, capture_output=True, encoding="utf-8", errors="replace")
+            return subprocess.run(
+                cmd,
+                text=True,
+                input=f"{self.target.sudo_password}\n",
+                capture_output=True,
+                env=_ssh_env(self.target.password),
+            )
+        return subprocess.run(
+            cmd,
+            text=True,
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            env=_ssh_env(self.target.password),
+        )
 
     def run_input_privileged(
             self,
@@ -119,8 +139,14 @@ class SSHSession:
             return subprocess.CompletedProcess([], 0, "", "")
         cmd = self._ssh_base_cmd(control_master=False) + [self.target.host, sudo_cmd]
         if self.target.sudo_mode == "password":
-            return subprocess.run(cmd, text=True, input=f"{self.target.sudo_password}\n{content}", capture_output=True)
-        return subprocess.run(cmd, text=True, input=content, capture_output=True)
+            return subprocess.run(
+                cmd,
+                text=True,
+                input=f"{self.target.sudo_password}\n{content}",
+                capture_output=True,
+                env=_ssh_env(self.target.password),
+            )
+        return subprocess.run(cmd, text=True, input=content, capture_output=True, env=_ssh_env(self.target.password))
 
     def put_dir_tar(self, local_dir: str, remote_dir: str) -> subprocess.CompletedProcess:
         if self.target.dry_run:
@@ -136,17 +162,28 @@ class SSHSession:
             remote_cmd = f"{_sudo_prefix(self.target)} sh -c {shlex.quote(remote_cmd)}"
         ssh_cmd = self._ssh_base_cmd(control_master=False) + [self.target.host, remote_cmd]
         tar_proc = subprocess.Popen(tar_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        tar_bytes = tar_proc.stdout.read() if tar_proc.stdout else b""
+        ssh_proc = subprocess.Popen(
+            ssh_cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=_ssh_env(self.target.password),
+        )
+        if not tar_proc.stdout or not ssh_proc.stdin:
+            raise RuntimeError("Failed to open tar/ssh streams for upload.")
         if self.target.sudo_mode == "password":
-            stdin_bytes = (f"{self.target.sudo_password}\n").encode("utf-8") + tar_bytes
-        else:
-            stdin_bytes = tar_bytes
-        ssh_proc = subprocess.run(ssh_cmd, input=stdin_bytes, capture_output=True)
+            ssh_proc.stdin.write(f"{self.target.sudo_password}\n".encode("utf-8"))
+        shutil.copyfileobj(tar_proc.stdout, ssh_proc.stdin)
+        tar_proc.stdout.close()
+        ssh_proc.stdin.close()
+        tar_stderr = tar_proc.stderr.read() if tar_proc.stderr else b""
         tar_proc.wait()
+        stdout, stderr = ssh_proc.communicate()
         if tar_proc.returncode != 0:
-            stderr = (tar_proc.stderr.read() if tar_proc.stderr else b"").decode("utf-8", errors="ignore")
-            raise RuntimeError(f"Failed to create tar archive: {stderr.strip()}")
-        return ssh_proc
+            raise RuntimeError(
+                f"Failed to create tar archive: {tar_stderr.decode('utf-8', errors='ignore').strip()}"
+            )
+        return subprocess.CompletedProcess(ssh_cmd, ssh_proc.returncode or 0, stdout, stderr)
 
 
 def _decode_stderr(raw: bytes | str | None) -> str:
@@ -158,7 +195,7 @@ def _decode_stderr(raw: bytes | str | None) -> str:
 
 
 def _ssh_base_cmd(self, *, control_master: bool) -> list[str]:
-    cmd = ["ssh", "-p", str(self.target.port), "-o", "StrictHostKeyChecking=accept-new"]
+    cmd = ["ssh", "-p", str(self.target.port), "-o", "StrictHostKeyChecking=yes"]
     if not is_windows() and self._control_master_enabled:
         cmd += ["-o", f"ControlPath={self.control_path}"]
         if control_master:
@@ -173,7 +210,7 @@ def _ssh_base_cmd(self, *, control_master: bool) -> list[str]:
             )
         if not shutil.which("sshpass"):
             raise RuntimeError("sshpass is required for password authentication")
-        cmd = ["sshpass", "-p", self.target.password] + cmd
+        cmd = ["sshpass", "-e"] + cmd
     return cmd
 
 
@@ -191,7 +228,7 @@ def build_control_path(*, dry_run: bool) -> str:
 
 
 def _base_ssh_cmd(target: SshTarget) -> list[str]:
-    cmd = ["ssh", "-p", str(target.port), "-o", "StrictHostKeyChecking=accept-new"]
+    cmd = ["ssh", "-p", str(target.port), "-o", "StrictHostKeyChecking=yes"]
     if target.key_path:
         cmd += ["-i", target.key_path]
     if target.password:
@@ -202,12 +239,12 @@ def _base_ssh_cmd(target: SshTarget) -> list[str]:
             )
         if not shutil.which("sshpass"):
             raise RuntimeError("sshpass is required for password authentication")
-        cmd = ["sshpass", "-p", target.password] + cmd
+        cmd = ["sshpass", "-e"] + cmd
     return cmd
 
 
 def _base_scp_cmd(target: SshTarget) -> list[str]:
-    cmd = ["scp", "-P", str(target.port), "-o", "StrictHostKeyChecking=accept-new"]
+    cmd = ["scp", "-P", str(target.port), "-o", "StrictHostKeyChecking=yes"]
     if target.key_path:
         cmd += ["-i", target.key_path]
     if target.password:
@@ -218,7 +255,7 @@ def _base_scp_cmd(target: SshTarget) -> list[str]:
             )
         if not shutil.which("sshpass"):
             raise RuntimeError("sshpass is required for password authentication")
-        cmd = ["sshpass", "-p", target.password] + cmd
+        cmd = ["sshpass", "-e"] + cmd
     return cmd
 
 
@@ -313,7 +350,7 @@ def _run_raw(target: SshTarget, command: str) -> subprocess.CompletedProcess:
     if target.dry_run:
         console.info(f"[dry-run] ssh {target.host}: {command}")
         return subprocess.CompletedProcess(cmd, 0, "", "")
-    return subprocess.run(cmd, text=True, capture_output=True)
+    return subprocess.run(cmd, text=True, capture_output=True, env=_ssh_env(target.password))
 
 
 def run_remote(target: SshTarget, command: str, *, cwd: str | None = None) -> subprocess.CompletedProcess:
@@ -322,7 +359,7 @@ def run_remote(target: SshTarget, command: str, *, cwd: str | None = None) -> su
     if target.dry_run:
         console.info(f"[dry-run] ssh {target.host}: {remote_cmd}")
         return subprocess.CompletedProcess(cmd, 0, "", "")
-    return subprocess.run(cmd, text=True, capture_output=True)
+    return subprocess.run(cmd, text=True, capture_output=True, env=_ssh_env(target.password))
 
 
 def run_remote_input(
@@ -338,7 +375,7 @@ def run_remote_input(
     if target.dry_run:
         console.info(f"[dry-run] ssh {target.host}: {log_label}")
         return subprocess.CompletedProcess(cmd, 0, "", "")
-    return subprocess.run(cmd, text=True, input=content, capture_output=True)
+    return subprocess.run(cmd, text=True, input=content, capture_output=True, env=_ssh_env(target.password))
 
 
 def run_remote_privileged(target: SshTarget, command: str, *, cwd: str | None = None) -> subprocess.CompletedProcess:
@@ -389,14 +426,33 @@ def upload_dir_tar(target: SshTarget, local_dir: str, remote_dir: str) -> subpro
         remote_cmd = f"{_sudo_prefix(target)} sh -lc {shlex.quote(remote_cmd)}"
     ssh_cmd = _base_ssh_cmd(target) + [target.host, remote_cmd]
     tar_proc = subprocess.Popen(tar_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    tar_bytes = tar_proc.stdout.read() if tar_proc.stdout else b""
+    ssh_proc = subprocess.Popen(
+        ssh_cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=_ssh_env(target.password),
+    )
+    if not tar_proc.stdout or not ssh_proc.stdin:
+        raise RuntimeError("Failed to open tar/ssh streams for upload.")
     if target.sudo_mode == "password":
-        stdin_bytes = (f"{target.sudo_password}\n").encode("utf-8") + tar_bytes
-    else:
-        stdin_bytes = tar_bytes
-    ssh_proc = subprocess.run(ssh_cmd, input=stdin_bytes, capture_output=True)
+        ssh_proc.stdin.write(f"{target.sudo_password}\n".encode("utf-8"))
+    shutil.copyfileobj(tar_proc.stdout, ssh_proc.stdin)
+    tar_proc.stdout.close()
+    ssh_proc.stdin.close()
+    tar_stderr = tar_proc.stderr.read() if tar_proc.stderr else b""
     tar_proc.wait()
+    stdout, stderr = ssh_proc.communicate()
     if tar_proc.returncode != 0:
-        stderr = (tar_proc.stderr.read() if tar_proc.stderr else b"").decode("utf-8", errors="ignore")
-        raise RuntimeError(f"Failed to create tar archive: {stderr.strip()}")
-    return ssh_proc
+        raise RuntimeError(
+            f"Failed to create tar archive: {tar_stderr.decode('utf-8', errors='ignore').strip()}"
+        )
+    return subprocess.CompletedProcess(ssh_cmd, ssh_proc.returncode or 0, stdout, stderr)
+
+
+def _ssh_env(password: str | None) -> dict[str, str] | None:
+    if not password:
+        return None
+    env = os.environ.copy()
+    env["SSHPASS"] = password
+    return env

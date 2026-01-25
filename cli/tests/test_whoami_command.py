@@ -6,7 +6,7 @@ from typer.testing import CliRunner
 
 
 def test_top_level_whoami_command_available(monkeypatch) -> None:
-    monkeypatch.setattr(main, "resolve_auth_context", lambda: AuthContext(state="authed", role="admin"))
+    monkeypatch.setattr(main, "resolve_auth_context", lambda **_: AuthContext(state="authed", role="admin"))
     app = main._build_app()
     runner = CliRunner()
     result = runner.invoke(app, ["--help"])

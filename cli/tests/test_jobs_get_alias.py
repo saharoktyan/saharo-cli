@@ -15,7 +15,7 @@ class _DummyClient:
 
 
 def test_jobs_get_and_show_alias(monkeypatch) -> None:
-    monkeypatch.setattr(main, "resolve_auth_context", lambda: AuthContext(state="authed", role="admin"))
+    monkeypatch.setattr(main, "resolve_auth_context", lambda **_: AuthContext(state="authed", role="admin"))
     monkeypatch.setattr(jobs_cmd, "make_client", lambda *args, **kwargs: _DummyClient())
     app = main._build_app()
     runner = CliRunner()
