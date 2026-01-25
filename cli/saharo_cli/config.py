@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import tomllib
 from dataclasses import dataclass
 from typing import Any
@@ -12,9 +11,6 @@ from . import console
 
 APP_NAME = "saharo"
 CONFIG_FILENAME = "config.toml"
-LICENSE_API_URL_DEFAULT = "https://downloads.saharoktyan.ru"
-ENV_LICENSE_API_URL = "SAHARO_LICENSE_API_URL"
-
 _WARNED_BASE_URL_SCHEME = False
 
 
@@ -39,7 +35,6 @@ class AppConfig:
     base_url: str
     auth: AuthConfig
     agents: dict[str, AgentConfig]
-    license_api_url: str = LICENSE_API_URL_DEFAULT
 
 
 def config_path() -> str:
@@ -51,7 +46,6 @@ def default_config() -> AppConfig:
         base_url="http://127.0.0.1:8010",
         auth=AuthConfig(token="", token_type="bearer"),
         agents={},
-        license_api_url=LICENSE_API_URL_DEFAULT,
     )
 
 
@@ -101,7 +95,6 @@ def to_toml(cfg: AppConfig) -> dict[str, Any]:
     return _prune_none(
         {
             "base_url": cfg.base_url,
-            "license_api_url": cfg.license_api_url,
             "auth": {
                 "token": cfg.auth.token,
                 "token_type": cfg.auth.token_type,
@@ -131,7 +124,6 @@ def _prune_none(value: Any) -> Any:
 
 def from_toml(data: dict[str, Any]) -> AppConfig:
     base_url = normalize_base_url(str(data.get("base_url") or ""), warn=True)
-    license_api_url = str(data.get("license_api_url") or "").strip()
     auth_raw = data.get("auth") or {}
     token = ""
     token_type = "bearer"
@@ -169,7 +161,6 @@ def from_toml(data: dict[str, Any]) -> AppConfig:
             base_url=base_url,
             auth=AuthConfig(token=token, token_type=token_type),
             agents=agents,
-            license_api_url=license_api_url or LICENSE_API_URL_DEFAULT,
         )
 
     # Backward compatibility: profiles-based config
@@ -186,20 +177,15 @@ def from_toml(data: dict[str, Any]) -> AppConfig:
         if isinstance(prof, dict):
             base_url = normalize_base_url(str(prof.get("base_url") or ""), warn=True)
             token = str(prof.get("token") or "")
-            if not license_api_url:
-                license_api_url = str(prof.get("license_api_url") or "").strip()
             if base_url:
                 return AppConfig(
                     base_url=base_url,
                     auth=AuthConfig(token=token, token_type="bearer"),
                     agents=agents,
-                    license_api_url=license_api_url or LICENSE_API_URL_DEFAULT,
                 )
 
     cfg = default_config()
     cfg.agents = agents
-    if license_api_url:
-        cfg.license_api_url = license_api_url
     return cfg
 
 
@@ -234,20 +220,11 @@ def apply_profile(cfg: AppConfig, profile: str | None) -> AppConfig:
     auth_raw = prof.get("auth") if isinstance(prof.get("auth"), dict) else {}
     token = str(prof.get("token") or auth_raw.get("token") or cfg.auth.token)
     token_type = str(prof.get("token_type") or auth_raw.get("token_type") or cfg.auth.token_type)
-    license_api_url = str(prof.get("license_api_url") or cfg.license_api_url).strip()
     return AppConfig(
         base_url=base_url or cfg.base_url,
         auth=AuthConfig(token=token, token_type=token_type),
         agents=cfg.agents,
-        license_api_url=license_api_url or cfg.license_api_url,
     )
-
-
-def resolve_license_api_url(cfg: AppConfig) -> str:
-    env_value = os.getenv(ENV_LICENSE_API_URL, "").strip()
-    if env_value:
-        return env_value.rstrip("/")
-    return (cfg.license_api_url or LICENSE_API_URL_DEFAULT).strip().rstrip("/")
 
 
 def save_config(cfg: AppConfig) -> str:

@@ -14,18 +14,11 @@ import typer
 from rich.table import Table
 from saharo_client import ApiError, NetworkError
 
-from .host_bootstrap import DEFAULT_REGISTRY, normalize_registry_host
+from .host_bootstrap import DEFAULT_REGISTRY, IMAGE_COMPONENTS, normalize_registry_host
 from .. import console
-from ..config import load_config, AgentConfig, AppConfig, save_config, normalize_base_url, resolve_license_api_url
+from ..config import load_config, AgentConfig, AppConfig, save_config, normalize_base_url
 from ..formatting import format_age, format_list_timestamp
 from ..http import make_client
-from ..license_resolver import (
-    IMAGE_COMPONENTS,
-    LicenseEntitlements,
-    LicenseEntitlementsError,
-    resolve_entitlements,
-)
-from ..registry_store import load_registry
 from ..ssh import SshTarget, SSHSession, build_control_path, _ensure_sudo_mode, _sudo_prefix, is_windows
 
 app = typer.Typer(help="Agents commands.")
@@ -38,18 +31,7 @@ REGISTRATION_POLL_INTERVAL_S = 2
 WAIT_INDICATOR_INTERVAL_S = 0.5
 WATCH_POLL_INTERVAL_S = 5
 
-DEFAULT_LIC_URL = "https://downloads.saharoktyan.ru"
 DEFAULT_TAG = "1.0.0"
-
-
-def _resolve_entitlements_from_license(
-        lic_url: str, license_key: str
-) -> LicenseEntitlements:
-    try:
-        return resolve_entitlements(lic_url, license_key)
-    except LicenseEntitlementsError as exc:
-        console.err(str(exc))
-        raise typer.Exit(code=2)
 
 
 def _resolve_agent_version_from_host_api(cfg: AppConfig) -> tuple[str, str | None] | None:
@@ -402,10 +384,6 @@ def install_agent(
         local_path: str | None = typer.Option(None, "--local-path", help="Path to local deploy/agent directory."),
         create_server: bool = typer.Option(False, "--create-server", help="Create a server record after registration."),
         version: str | None = typer.Option(None, "--version", help="Exact agent version tag to deploy, e.g. 1.4.1"),
-        lic_url: str = typer.Option(DEFAULT_LIC_URL, "--lic-url",
-                                    help="License API base URL used to resolve versions."),
-        no_license: bool = typer.Option(False, "--no-license",
-                                        help="Do not query license API; use --tag or --version."),
         tag: str = typer.Option(DEFAULT_TAG, "--tag", help="Image tag to deploy (fallback)."),
 ):
     cfg = load_config()
@@ -428,34 +406,15 @@ def install_agent(
 
     if version:
         resolved_tag = version
-    elif not no_license:
+    else:
         host_result = _resolve_agent_version_from_host_api(cfg)
         if host_result:
             resolved_tag, registry_override = host_result
             if registry_override:
                 registry = registry_override
-            console.ok(f"Resolved agent version from host license cache: {resolved_tag}")
+            console.ok(f"Resolved agent version from host API: {resolved_tag}")
         else:
-            lic_url = resolve_license_api_url(cfg) or lic_url
-            registry_creds = load_registry()
-            license_key = registry_creds.license_key if registry_creds else None
-            if not license_key:
-                console.err(
-                    "License key not found. Re-run `saharo host bootstrap --license-key <key>` "
-                    "or pass --no-license."
-                )
-                raise typer.Exit(code=2)
-            entitlements = _resolve_entitlements_from_license(lic_url, license_key)
-            resolved_tag = entitlements.agent
-            if registry_creds and registry_creds.url:
-                registry = registry_creds.url
-            console.ok(
-                "Resolved versions from license entitlements: "
-                f"host={entitlements.host} agent={entitlements.agent} cli={entitlements.cli} "
-                f"(allowed major={entitlements.allowed_major if entitlements.allowed_major is not None else 'unknown'})"
-            )
-    else:
-        resolved_tag = tag
+            resolved_tag = tag
 
     pwd = None
     if password:

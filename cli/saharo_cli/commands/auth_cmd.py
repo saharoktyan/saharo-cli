@@ -1,17 +1,13 @@
 from __future__ import annotations
 
-import subprocess
-
 import typer
 from rich.table import Table
 from saharo_client import ApiError
 
 from .invite_cmd import accept_invite
 from .. import console
-from ..auth_state import resolve_auth_context
 from ..config import load_config, save_config
 from ..http import make_client
-from ..registry_store import delete_registry, load_registry, registry_path
 
 app = typer.Typer(help="Auth commands.")
 
@@ -59,93 +55,12 @@ def login_api_key(
     console.ok(f"Login successful. Token saved to {save_path}.")
 
 
-@app.command("logout", help="Clear API token and registry credentials.")
-def logout(
-        docker: bool = typer.Option(
-            True,
-            "--docker/--no-docker",
-            help="Log out of the Docker registry as well.",
-        ),
-):
+@app.command("logout", help="Clear API token.")
+def logout():
     cfg = load_config()
-    ctx = resolve_auth_context()
     cfg.auth.token = ""
     save_path = save_config(cfg)
     console.ok(f"Token cleared from {save_path}.")
-    if ctx.role == "admin":
-        creds = load_registry()
-        if creds and docker:
-            _docker_logout(creds.url)
-        if creds:
-            delete_registry()
-            console.ok("Registry credentials removed.")
-
-
-def _docker_logout(url: str) -> bool:
-    try:
-        result = subprocess.run(
-            ["docker", "logout", url],
-            capture_output=True,
-            check=False,
-        )
-    except FileNotFoundError:
-        console.warn("Docker CLI not found in PATH; skipping registry logout.")
-        return False
-    if result.returncode == 0:
-        return True
-    stderr = result.stderr.decode("utf-8", errors="replace").strip()
-    if stderr:
-        console.err(f"Docker logout failed: {stderr}")
-    else:
-        console.err("Docker logout failed.")
-    return False
-
-
-@app.command("activate", hidden=True)
-def activate(
-        license_key: str | None = typer.Option(
-            None,
-            "--license-key",
-            help="Deprecated.",
-        ),
-        machine_name: str | None = typer.Option(
-            None,
-            "--machine-name",
-            help="Deprecated.",
-        ),
-        note: str | None = typer.Option(
-            None,
-            "--note",
-            help="Deprecated.",
-        ),
-        login: bool = typer.Option(
-            False,
-            "--login/--no-login",
-            help="Deprecated.",
-        ),
-):
-    console.err(
-        "This command was removed. License activation is handled during `saharo host bootstrap` and stored on the host. "
-        "If you need to rebind a license, re-run host bootstrap with --license-key (or use the new recommended flow)."
-    )
-    raise typer.Exit(code=2)
-
-
-@app.command("status", help="Show current registry activation status.")
-def status(
-        verbose: bool = typer.Option(False, "--verbose", help="Show extra activation details."),
-):
-    creds = load_registry()
-    if not creds:
-        console.info("Not activated.")
-        return
-    issued_at = creds.issued_at or "-"
-    console.console.print(f"[bold]Registry:[/] {creds.url}")
-    console.console.print(f"[bold]Username:[/] {creds.username}")
-    console.console.print(f"[bold]Issued at:[/] {issued_at}")
-    if verbose:
-        console.console.print(f"[bold]Registry file:[/] {registry_path()}")
-        console.console.print(f"[bold]Password stored:[/] {'yes' if creds.password else 'no'}")
 
 
 app.command("register")(accept_invite)

@@ -16,12 +16,11 @@ from rich.text import Text
 from saharo_client import ApiError, AuthError, NetworkError
 
 from . import agents_cmd
-from .host_bootstrap import DEFAULT_REGISTRY, docker_login_ssh, normalize_registry_host
+from .host_bootstrap import DEFAULT_REGISTRY, normalize_registry_host
 from .. import console
 from ..config import load_config, normalize_base_url
 from ..formatting import format_age, format_list_timestamp
 from ..http import make_client
-from ..registry_store import load_registry
 from ..ssh import is_windows
 
 app = typer.Typer(help="Servers commands.")
@@ -86,55 +85,6 @@ def _resolve_agent_version_from_host_api(cfg, base_url_override: str | None) -> 
         registry_url = normalize_registry_host(registry_url) or None
 
     return agent_tag.strip(), registry_url
-
-
-def _fetch_registry_creds_from_host_api(
-        cfg,
-        base_url_override: str | None,
-) -> tuple[str, str, str] | None:
-    client = make_client(cfg, profile=None, base_url_override=base_url_override)
-    try:
-        snapshot = client.admin_license_snapshot()
-    except (ApiError, AuthError, NetworkError):
-        return None
-    finally:
-        client.close()
-
-    versions = snapshot.get("versions") if isinstance(snapshot, dict) else None
-    if not isinstance(versions, dict):
-        return None
-    registry = versions.get("registry")
-    if not isinstance(registry, dict):
-        return None
-    registry_url = str(registry.get("url") or "").strip()
-    registry_username = str(registry.get("username") or "").strip()
-    registry_password = registry.get("password")
-    if registry_password is not None and not isinstance(registry_password, str):
-        registry_password = None
-    if not registry_url or not registry_username or not registry_password:
-        return None
-    registry_url = normalize_registry_host(registry_url)
-    if not registry_url:
-        return None
-    return registry_url, registry_username, registry_password
-
-
-def _require_registry_activation(cfg, base_url_override: str | None) -> tuple[str, str, str]:
-    host_creds = _fetch_registry_creds_from_host_api(cfg, base_url_override)
-    if host_creds:
-        return host_creds
-    creds = load_registry()
-    if not creds or not creds.url or not creds.username or not creds.password:
-        console.err(
-            "Registry credentials missing. Re-run `saharo host bootstrap` with a valid license key, "
-            "or login to the registry on the remote host, or configure registry creds in config.toml."
-        )
-        raise typer.Exit(code=2)
-    registry_url = normalize_registry_host(creds.url)
-    if not registry_url:
-        console.err("Registry URL is missing or invalid.")
-        raise typer.Exit(code=2)
-    return registry_url, creds.username, creds.password
 
 
 def _is_registry_auth_error(text: str) -> bool:
@@ -1007,7 +957,6 @@ def bootstrap(
         password: bool = typer.Option(False, "--password", help="Prompt for SSH password."),
         sudo: bool = typer.Option(False, "--sudo", help="Use sudo -n for privileged commands."),
         sudo_password: bool = typer.Option(False, "--sudo-password", help="Prompt for sudo password."),
-        no_remote_login: bool = typer.Option(False, "--no-remote-login", help="Skip docker login on the remote host."),
         with_docker: bool = typer.Option(False, "--with-docker", help="Bootstrap Docker if missing."),
         dry_run: bool = typer.Option(False, "--dry-run", help="Print actions without executing."),
         api_url: str | None = typer.Option(None, "--api-url", help="Override API base URL for the runtime."),
@@ -1025,9 +974,6 @@ def bootstrap(
         json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
         local: bool = typer.Option(False, "--local", help="Install locally using the bundled runtime deploy files."),
         local_path: str | None = typer.Option(None, "--local-path", help="Path to local runtime deploy directory."),
-        lic_url: str = typer.Option(agents_cmd.DEFAULT_LIC_URL, "--lic-url",
-                                    help="License API base URL used to resolve versions."),
-        no_license: bool = typer.Option(False, "--no-license", help="Do not query license API for agent version."),
         agent_version: str | None = typer.Option(None, "--agent-version",
                                                  help="Exact agent version tag to deploy, e.g. 1.4.1"),
         registry: str = typer.Option(DEFAULT_REGISTRY, "--registry", help="Container registry for agent images."),
@@ -1092,12 +1038,10 @@ def bootstrap(
 
     if agent_version:
         resolved_tag = agent_version
-    elif not no_license:
+    else:
         resolved_tag, registry_override = _resolve_agent_version_from_host_api(cfg, base_url_override=base_url)
         if registry_override:
             registry = registry_override
-    else:
-        resolved_tag = agents_cmd.DEFAULT_TAG
     registry = normalize_registry_host(registry)
     if not registry:
         console.err("Registry URL is missing or invalid.")
@@ -1123,13 +1067,9 @@ def bootstrap(
         if agent_id is None:
             agents_cmd._cleanup_agent_installation_local(allow_existing_state=False, label="bootstrap")
             env_path = f"{compose_dir}/.env"
-            registry_url, registry_username, registry_password = _require_registry_activation(cfg, base_url)
             env_content = (
                 f"AGENT_API_BASE={agent_api_url}\n"
                 f"SAHARO_AGENT_INVITE={invite_token}\n"
-                f"REGISTRY_URL={registry_url}\n"
-                f"REGISTRY_USERNAME={registry_username}\n"
-                f"REGISTRY_PASSWORD={registry_password}\n"
             )
             if force_reregister:
                 env_content += "SAHARO_AGENT_FORCE_REREGISTER=1\n"
@@ -1235,7 +1175,6 @@ def bootstrap(
                     console.err(res.stderr.strip() or "Failed to create remote directory.")
                     raise typer.Exit(code=2)
 
-                registry_url, registry_username, registry_password = _require_registry_activation(cfg, base_url)
                 compose_content = agents_cmd._render_agent_compose(registry, resolved_tag)
                 if sudo:
                     res = session.run_input_privileged(
@@ -1256,9 +1195,6 @@ def bootstrap(
                 env_content = (
                     f"AGENT_API_BASE={agent_api_url}\n"
                     f"SAHARO_AGENT_INVITE={invite_token}\n"
-                    f"REGISTRY_URL={registry_url}\n"
-                    f"REGISTRY_USERNAME={registry_username}\n"
-                    f"REGISTRY_PASSWORD={registry_password}\n"
                 )
                 if force_reregister:
                     env_content += "SAHARO_AGENT_FORCE_REREGISTER=1\n"
@@ -1289,35 +1225,10 @@ def bootstrap(
                 else:
                     if _is_registry_auth_error(pre_pull_output):
                         console.info("Remote registry requires authentication.")
-                        if no_remote_login:
-                            console.err("Remote docker login skipped (--no-remote-login); cannot pull agent image.")
-                            raise typer.Exit(code=2)
-                        console.info("Attempting docker login on remote host...")
-                        login_ok = True
-                        try:
-                            docker_login_ssh(
-                                session,
-                                registry_url,
-                                registry_username,
-                                registry_password,
-                                sudo=sudo,
-                            )
-                        except typer.Exit:
-                            login_ok = False
-                        retry_pull = pull_runner(pull_image_cmd)
-                        retry_output = f"{retry_pull.stdout or ''}\n{retry_pull.stderr or ''}"
-                        if retry_pull.returncode != 0:
-                            if _is_registry_auth_error(retry_output):
-                                console.err(
-                                    "Remote docker is not authenticated to registry; re-run `saharo host bootstrap` with a valid "
-                                    "license key or login to the registry on the remote host."
-                                )
-                            console.err(retry_pull.stderr.strip() or "Failed to pull bootstrap container.")
-                            raise typer.Exit(code=2)
-                        if login_ok:
-                            console.info("Remote registry pull succeeded after login.")
-                        else:
-                            console.warn("Docker login failed, but pull succeeded; continuing.")
+                        console.err(
+                            "Remote docker is not authenticated to registry; login on the remote host and retry."
+                        )
+                        raise typer.Exit(code=2)
                     else:
                         console.err(pre_pull.stderr.strip() or "Failed to pull bootstrap container.")
                         raise typer.Exit(code=2)
@@ -1332,8 +1243,7 @@ def bootstrap(
                     auth_output = f"{res.stdout or ''}\n{res.stderr or ''}"
                     if _is_registry_auth_error(auth_output):
                         console.err(
-                            "Remote docker is not authenticated to registry; re-run `saharo host bootstrap` with a valid "
-                            "license key or login to the registry on the remote host."
+                            "Remote docker is not authenticated to registry; login on the remote host and retry."
                         )
                     console.err(res.stderr.strip() or "Failed to pull bootstrap container.")
                     raise typer.Exit(code=2)
