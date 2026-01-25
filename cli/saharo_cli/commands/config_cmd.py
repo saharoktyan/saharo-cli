@@ -362,7 +362,9 @@ def get_config(
         device_label,
         awg_conf=conf if protocol_key == "awg" else False,
     )
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    output_dir = os.path.dirname(output_path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
 
     content = None
     if protocol_key == "awg":
@@ -404,5 +406,3 @@ def get_config(
         if not quiet:
             console.console.print("")
             console.console.print(str(content), markup=False)
-
-# wqeqweqweqweqwe

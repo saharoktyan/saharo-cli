@@ -34,7 +34,7 @@ def resolve_auth_context() -> AuthContext:
     except AuthError:
         return AuthContext(state="invalid_token")
     except (ApiError, NetworkError):
-        return AuthContext(state="invalid_token")
+        return AuthContext(state="unreachable")
     finally:
         client.close()
 
