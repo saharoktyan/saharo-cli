@@ -40,21 +40,18 @@ def show_settings():
     cfg = load_config()
     token_state = "(set)" if (cfg.auth.token or "").strip() else "(empty)"
     console.console.print(
-        f"base_url={cfg.base_url} license_api_url={cfg.license_api_url} token={token_state} token_type={cfg.auth.token_type}"
+        f"base_url={cfg.base_url} token={token_state} token_type={cfg.auth.token_type}"
     )
 
 
 @app.command("get")
 def get_setting(
-        key: str = typer.Argument(..., help="Setting key (base_url, license_api_url)."),
+        key: str = typer.Argument(..., help="Setting key (base_url)."),
 ):
     cfg = load_config()
     k = key.strip().lower()
     if k == "base_url":
         console.console.print(cfg.base_url)
-        return
-    if k == "license_api_url":
-        console.console.print(cfg.license_api_url)
         return
     console.err(f"Unknown setting: {key}")
     raise typer.Exit(code=2)
@@ -63,12 +60,9 @@ def get_setting(
 @app.command("set")
 def set_setting(
         base_url: str | None = typer.Option(None, "--base-url", help="Set API base URL."),
-        license_api_url: str | None = typer.Option(None, "--license-api-url", help="Set license API URL."),
 ):
     cfg = load_config()
     if base_url is not None:
         cfg.base_url = normalize_base_url(base_url, warn=True)
-    if license_api_url is not None:
-        cfg.license_api_url = license_api_url.strip().rstrip("/")
     saved = save_config(cfg)
     console.ok(f"Settings updated: {saved}")

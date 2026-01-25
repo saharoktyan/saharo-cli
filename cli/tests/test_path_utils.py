@@ -33,4 +33,3 @@ def test_bootstrap_inputs_posix_paths() -> None:
     assert inputs.env_path_posix == "/opt/saharo/host/.env"
     assert inputs.readme_path_posix == "/opt/saharo/host/README.txt"
     assert inputs.data_dir_posix == "/opt/saharo/host/data/postgres"
-    assert inputs.license_state_path_posix == "/opt/saharo/host/state/license.json"

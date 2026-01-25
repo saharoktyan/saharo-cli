@@ -28,19 +28,6 @@ def test_save_config_omits_none_agent_id(tmp_path, monkeypatch) -> None:
     assert "agent_id =" not in contents
 
 
-def test_resolve_license_api_url_env_override(monkeypatch) -> None:
-    cfg = config.default_config()
-    monkeypatch.setenv(config.ENV_LICENSE_API_URL, "http://127.0.0.1:8030/")
-    assert config.resolve_license_api_url(cfg) == "http://127.0.0.1:8030"
-
-
-def test_resolve_license_api_url_from_config(monkeypatch) -> None:
-    cfg = config.default_config()
-    cfg.license_api_url = "https://lic.example.test/"
-    monkeypatch.delenv(config.ENV_LICENSE_API_URL, raising=False)
-    assert config.resolve_license_api_url(cfg) == "https://lic.example.test"
-
-
 def test_normalize_base_url_defaults_to_https() -> None:
     assert config.normalize_base_url("example.com") == "https://example.com"
 

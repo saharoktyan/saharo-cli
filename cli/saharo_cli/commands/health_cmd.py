@@ -1,22 +1,15 @@
 from __future__ import annotations
 
-import platform as platform_mod
 from datetime import datetime, timezone
 
-import httpx
 import typer
 
 from ..compat import cli_protocol, cli_version
-from ..config import load_config, resolve_license_api_url
+from ..config import load_config
 from ..console import err, info, ok, print_json, warn
-from ..registry_store import load_registry
 from ..semver import is_version_in_range
 
 app = typer.Typer(help="Diagnostics for hub compatibility and updates.")
-
-
-def _platform_id() -> str:
-    return f"{platform_mod.system().lower()}-{platform_mod.machine().lower()}"
 
 
 def _emit(level: str, msg: str, *, json_mode: bool) -> None:
@@ -49,13 +42,6 @@ def health(
             "base_url": base_url or None,
             "cli_version": current_version,
             "cli_protocol": current_protocol,
-            "errors": [],
-        },
-        "license": {
-            "ok": None,
-            "license_api_url": None,
-            "entitlements": None,
-            "updates": None,
             "errors": [],
         },
     }
@@ -119,90 +105,8 @@ def health(
             hub_errors.append("hub_version_request_failed")
             _emit("warn", f"Hub /version check failed: {exc}", json_mode=json_output)
 
-    registry = load_registry()
-    license_key = registry.license_key if registry else None
-    lic_url = resolve_license_api_url(cfg)
-    license_result = result["license"]
-    license_errors: list[str] = license_result["errors"]  # type: ignore[assignment]
-    license_result["license_api_url"] = lic_url or None
-
-    if not license_key:
-        license_errors.append("license_key_missing")
-        _emit("warn", "License key not found in registry store; skipping license checks.", json_mode=json_output)
-    elif lic_url:
-        entitlements_endpoint = f"{lic_url.rstrip('/')}/v1/entitlements"
-        try:
-            resp = httpx.get(
-                entitlements_endpoint,
-                headers={"X-License-Key": license_key},
-                timeout=5.0,
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                allowed_major = data.get("allowed_major")
-                resolved = data.get("resolved_versions") or {}
-                entitlements = {
-                    "allowed_major": allowed_major,
-                    "resolved_versions": resolved,
-                    "strategy": data.get("strategy"),
-                    "source": data.get("source"),
-                }
-                license_result["entitlements"] = entitlements
-                _emit(
-                    "ok",
-                    f"License OK. Allowed major: {allowed_major}; resolved: {resolved}.",
-                    json_mode=json_output,
-                )
-            else:
-                license_errors.append(f"entitlements_http_{resp.status_code}")
-                _emit("warn", f"License API error ({resp.status_code}).", json_mode=json_output)
-        except Exception as exc:
-            license_errors.append("entitlements_request_failed")
-            _emit("warn", f"License API check failed: {exc}", json_mode=json_output)
-
-        updates_endpoint = f"{lic_url.rstrip('/')}/v1/updates/cli"
-        try:
-            resp = httpx.get(
-                updates_endpoint,
-                params={"current": current_version, "platform": _platform_id()},
-                headers={"X-License-Key": license_key},
-                timeout=5.0,
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                updates = {
-                    "update_available": data.get("update_available"),
-                    "current": data.get("current"),
-                    "latest": data.get("latest"),
-                }
-                license_result["updates"] = updates
-                if data.get("update_available"):
-                    _emit(
-                        "warn",
-                        f"CLI update available: {data.get('latest')} (current {data.get('current')}).",
-                        json_mode=json_output,
-                    )
-                else:
-                    _emit("ok", "CLI is up to date.", json_mode=json_output)
-            else:
-                license_errors.append(f"updates_http_{resp.status_code}")
-                _emit("info", f"Update check skipped ({resp.status_code}).", json_mode=json_output)
-        except Exception as exc:
-            license_errors.append("updates_request_failed")
-            _emit("warn", f"Update check failed: {exc}", json_mode=json_output)
-
-        if verbose:
-            license_result["endpoints"] = {
-                "entitlements": entitlements_endpoint,
-                "updates": updates_endpoint,
-            }
-
-        license_result["ok"] = not license_errors
-
     if hub.get("ok") is None:
         hub["ok"] = False if hub_errors else None
-    if license_result.get("ok") is None:
-        license_result["ok"] = False if license_errors else None
 
     if json_output:
         print_json(result)

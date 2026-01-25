@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 import posixpath
 import re
@@ -30,16 +29,9 @@ from .host_https import (
     report_https_failure,
 )
 from .. import console
-from ..license_resolver import (
-    IMAGE_COMPONENTS,
-    LicenseEntitlements,
-    LicenseEntitlementsError,
-    resolve_entitlements,
-)
-from ..path_utils import looks_like_windows_path
 from ..ssh import SSHSession, SshTarget, build_control_path, is_windows
-
-DEFAULT_LIC_URL = "https://downloads.saharoktyan.ru"
+from ..path_utils import looks_like_windows_path
+IMAGE_COMPONENTS = {"host": "api", "agent": "agent"}
 
 _SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
 _MISSING_FIELD_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*$")
@@ -56,104 +48,9 @@ DEFAULT_HEALTH_CURL_TIMEOUT = 5
 DEFAULT_HEALTH_LOG_TAIL = 60
 DEFAULT_API_CONTAINER = "saharo_host_api"
 _TRANSIENT_CURL_EXIT_CODES = {7, 28, 52, 56}
-_LICENSE_STATE_RELATIVE_PATH = Path("state") / "license.json"
-_LICENSE_STATE_RELATIVE_POSIX = posixpath.join("state", "license.json")
-
 _LAST_PULL_STDERR: str | None = None
 
 
-def _is_verbose() -> bool:
-    return logging.getLogger().isEnabledFor(logging.DEBUG)
-
-
-def _redact_secret(value: str) -> str:
-    if not value:
-        return ""
-    if len(value) <= 8:
-        if len(value) <= 2:
-            return "*" * len(value)
-        return f"{value[0]}{'*' * (len(value) - 2)}{value[-1]}"
-    return f"{value[:4]}...{value[-4:]}"
-
-
-def _format_auth_header(headers: dict[str, str] | None) -> str:
-    if not headers:
-        return "(none)"
-    if "Authorization" in headers:
-        raw = headers["Authorization"]
-        parts = raw.split(" ", 1)
-        if len(parts) == 2 and parts[0].lower() == "bearer":
-            return f"Authorization: Bearer {_redact_secret(parts[1])}"
-        return f"Authorization: {_redact_secret(raw)}"
-    if "X-License-Key" in headers:
-        return f"X-License-Key: {_redact_secret(headers['X-License-Key'])}"
-    name, value = next(iter(headers.items()))
-    return f"{name}: {_redact_secret(value)}"
-
-
-def _emit_license_request(url: str, headers: dict[str, str] | None) -> None:
-    console.info(f"License API request: {url}")
-    console.info(f"Auth: {_format_auth_header(headers)}")
-
-
-def _emit_license_error(
-        url: str,
-        headers: dict[str, str] | None,
-        response: httpx.Response,
-) -> None:
-    console.err(f"License API request failed: HTTP {response.status_code}")
-    console.err(f"URL: {url}")
-    console.err(f"Auth: {_format_auth_header(headers)}")
-    body_text = response.text.strip()
-    if body_text:
-        console.err(f"Response: {body_text}")
-    detail = _extract_license_detail(response)
-    if detail is not None:
-        if isinstance(detail, (dict, list)):
-            console.info("Detail:")
-            console.print_json(detail)
-        else:
-            console.err(f"Detail: {detail}")
-
-
-def _extract_license_detail(response: httpx.Response) -> object | None:
-    try:
-        data = response.json()
-    except ValueError:
-        return None
-    if isinstance(data, dict) and "detail" in data:
-        return data.get("detail")
-    return None
-
-
-def _license_api_request(
-        method: str,
-        url: str,
-        *,
-        headers: dict[str, str] | None,
-        json_body: dict | None = None,
-        timeout_s: float = 10.0,
-) -> httpx.Response:
-    if _is_verbose():
-        _emit_license_request(url, headers)
-    try:
-        response = httpx.request(
-            method,
-            url,
-            headers=headers,
-            json=json_body,
-            timeout=timeout_s,
-        )
-    except httpx.RequestError as exc:
-        console.err(f"License API request failed: {exc}")
-        _emit_license_request(url, headers)
-        raise typer.Exit(code=2)
-    if response.status_code >= 400:
-        if response.status_code in (401, 403):
-            console.err("Invalid or revoked license key")
-        _emit_license_error(url, headers, response)
-        raise typer.Exit(code=2)
-    return response
 
 
 @dataclass(frozen=True)
@@ -206,10 +103,6 @@ class BootstrapInputs:
         return posixpath.join(self.host_dir_posix, "data", "postgres")
 
     @property
-    def license_state_path_posix(self) -> str:
-        return posixpath.join(self.host_dir_posix, _LICENSE_STATE_RELATIVE_POSIX)
-
-    @property
     def compose_path(self) -> Path:
         return self.host_dir / "docker-compose.yml"
 
@@ -237,87 +130,6 @@ class PrereqResult:
     docker_running: bool
 
 
-@dataclass(frozen=True)
-class _RegistryActivation:
-    registry_url: str
-    registry_username: str
-    registry_password: str | None
-    resolved_host_tag: str
-    resolved_versions: dict[str, str]
-    entitlements_json: dict | list | None
-
-
-def fetch_registry_creds_from_license(
-        lic_url: str,
-        *,
-        license_key: str,
-        machine_name: str,
-        resolved_versions: dict[str, str] | None = None,
-) -> _RegistryActivation:
-    url = lic_url.rstrip("/") + "/v1/activate"
-    payload = {"machine_name": machine_name, "note": "host bootstrap"}
-    response = _license_api_request(
-        "POST",
-        url,
-        headers={"X-License-Key": license_key},
-        json_body=payload,
-    )
-
-    try:
-        data = response.json()
-    except ValueError:
-        console.err("Activation failed: invalid JSON response.")
-        raise typer.Exit(code=2)
-
-    registry = data.get("registry")
-    if not isinstance(registry, dict):
-        console.err("Activation failed: missing registry data.")
-        raise typer.Exit(code=2)
-    registry_url = str(registry.get("url") or "").strip()
-    registry_username = str(registry.get("username") or "").strip()
-    registry_password = registry.get("password")
-    if registry_password is not None and not isinstance(registry_password, str):
-        registry_password = None
-    entitlements_json = data.get("entitlements")
-    if entitlements_json is not None and not isinstance(entitlements_json, (dict, list)):
-        entitlements_json = None
-    if resolved_versions is None:
-        resolved_from_activate = data.get("resolved_versions")
-        if not isinstance(resolved_from_activate, dict):
-            console.err("Activation failed: missing resolved_versions data.")
-            raise typer.Exit(code=2)
-        resolved_versions = {
-            str(k): str(v)
-            for k, v in resolved_from_activate.items()
-            if isinstance(v, str) and v
-        }
-    resolved_host_tag = resolved_versions.get("host") if resolved_versions else None
-    if not isinstance(resolved_host_tag, str) or not _SEMVER_RE.match(resolved_host_tag):
-        console.err("Activation failed: missing resolved_versions.host.")
-        raise typer.Exit(code=2)
-    if not registry_url or not registry_username:
-        console.err("Activation failed: registry credentials are incomplete.")
-        raise typer.Exit(code=2)
-
-    return _RegistryActivation(
-        registry_url=registry_url,
-        registry_username=registry_username,
-        registry_password=registry_password,
-        resolved_host_tag=resolved_host_tag,
-        resolved_versions=resolved_versions,
-        entitlements_json=entitlements_json,
-    )
-
-
-def _print_entitlement_versions(entitlements: LicenseEntitlements) -> None:
-    allowed = entitlements.allowed_major
-    allowed_text = str(allowed) if allowed is not None else "unknown"
-    console.ok(
-        "Resolved versions from license entitlements: "
-        f"host={entitlements.host} agent={entitlements.agent} cli={entitlements.cli} "
-        f"(allowed major={allowed_text})"
-    )
-
 
 def _normalize_remote_install_dir(install_dir: str) -> str:
     clean = (install_dir or "").strip()
@@ -344,11 +156,6 @@ def host_bootstrap(
         install_dir: str = typer.Option(DEFAULT_INSTALL_DIR, "--install-dir", help="Installation directory."),
         registry: str = typer.Option(DEFAULT_REGISTRY, "--registry", help="Container registry for images."),
         version: str | None = typer.Option(None, "--version", help="Exact host version tag to deploy, e.g. 1.4.1"),
-        lic_url: str = typer.Option(DEFAULT_LIC_URL, "--lic-url",
-                                    help="License API base URL used to resolve versions."),
-        no_license: bool = typer.Option(False, "--no-license",
-                                        help="Do not query license API; use --tag or --version."),
-        license_key: str | None = typer.Option(None, "--license-key", help="License key for version resolution."),
         tag: str = typer.Option(DEFAULT_TAG, "--tag", help="Image tag to deploy (fallback)."),
         wipe_data: bool = typer.Option(False, "--wipe-data", help="DANGEROUS: delete all host data before install."),
         confirm_wipe: bool = typer.Option(
@@ -357,11 +164,6 @@ def host_bootstrap(
             help="Confirm the irreversible wipe (required with --wipe-data in non-interactive mode).",
         ),
         skip_https: bool = typer.Option(False, "--skip-https", help="Skip HTTPS setup entirely."),
-        print_versions: bool = typer.Option(
-            False,
-            "--print-versions",
-            help="Resolve versions from license entitlements and exit.",
-        ),
         non_interactive: bool = typer.Option(False, "--non-interactive", help="Fail if required flags are missing."),
         assume_yes: bool = typer.Option(False, "--yes", help="Assume yes where safe."),
         no_docker_install: bool = typer.Option(False, "--no-docker-install", help="Do not offer docker install."),
@@ -381,17 +183,13 @@ def host_bootstrap(
     """Interactive installation wizard for Saharo host stack.
 
     Examples:
-      saharo host bootstrap --api-url https://api.example.com --license-key <key>
-      saharo host bootstrap --ssh-host root@203.0.113.10 --license-key <key>
+      saharo host bootstrap --api-url https://api.example.com
+      saharo host bootstrap --ssh-host root@203.0.113.10
     """
     console.rule("[bold]Saharo Host Bootstrap[/]")
 
     if ssh_key and ssh_key.endswith(".pub"):
         console.err("--ssh-key must be a private key path, not .pub")
-        raise typer.Exit(code=2)
-
-    if print_versions and no_license:
-        console.err("--print-versions requires license entitlements; remove --no-license.")
         raise typer.Exit(code=2)
 
     if is_windows() and not ssh_host:
@@ -409,26 +207,6 @@ def host_bootstrap(
             confirm_wipe=confirm_wipe,
             remote=bool(ssh_host),
         )
-
-    if not no_license and lic_url and not license_key:
-        if non_interactive:
-            console.err("Missing required flag: --license-key (or pass --no-license).")
-            raise typer.Exit(code=2)
-        license_key = typer.prompt("License key", hide_input=True)
-        if not (license_key or "").strip():
-            console.err("ERR License key is required (or pass --no-license / --tag / --version).")
-            raise typer.Exit(code=2)
-
-    entitlements = None
-    if not no_license and lic_url:
-        try:
-            entitlements = resolve_entitlements(lic_url, license_key or "")
-        except LicenseEntitlementsError as exc:
-            console.err(str(exc))
-            raise typer.Exit(code=2)
-        if print_versions:
-            _print_entitlement_versions(entitlements)
-            return
 
     if ssh_host:
         _host_bootstrap_ssh(
@@ -451,38 +229,14 @@ def host_bootstrap(
             no_docker_install=no_docker_install,
             force=force,
             rotate_jwt_secret=rotate_jwt_secret,
-            lic_url=lic_url,
-            no_license=no_license,
-            license_key=license_key,
             version=version,
-            entitlements=entitlements,
             wipe_data=wipe_data,
             skip_https=skip_https,
         )
         return
 
-    activation = None
-    if not no_license and lic_url:
-        if entitlements is not None and not version:
-            _print_entitlement_versions(entitlements)
-        activation = fetch_registry_creds_from_license(
-            lic_url,
-            license_key=license_key or "",
-            machine_name=socket.gethostname(),
-            resolved_versions=entitlements.resolved_versions if entitlements else None,
-        )
-        if activation.registry_password is None:
-            console.err(
-                "Registry password not returned (credentials not rotated). Re-run "
-                "`saharo host bootstrap --license-key <key>` or rebind the license with rotation enabled, then retry."
-            )
-            raise typer.Exit(code=2)
-        registry = activation.registry_url or registry
-
     if version:
         resolved_tag = version
-    elif entitlements is not None:
-        resolved_tag = entitlements.host
     else:
         resolved_tag = tag
 
@@ -525,20 +279,9 @@ def host_bootstrap(
     if wipe_data:
         wipe_host_data(inputs)
 
-    if activation is not None:
-        docker_login_local(
-            activation.registry_url,
-            activation.registry_username,
-            activation.registry_password or "",
-        )
-
     write_files(inputs)
-    if activation is not None and license_key:
-        _write_license_state_local(inputs, license_key=license_key, activation=activation)
     compose_pull_up(inputs)
     verify_health(inputs)
-    if activation is not None and license_key:
-        bootstrap_license_cache(inputs, license_key=license_key, activation=activation)
     bootstrap_admin(inputs)
     verify_health(inputs)
     https_url = _maybe_setup_https_local(inputs)
@@ -566,11 +309,7 @@ def _host_bootstrap_ssh(
         no_docker_install: bool,
         force: bool,
         rotate_jwt_secret: bool,
-        lic_url: str,
-        no_license: bool,
-        license_key: str | None,
         version: str | None,
-        entitlements: LicenseEntitlements | None,
         wipe_data: bool,
         skip_https: bool,
 ) -> None:
@@ -621,38 +360,8 @@ def _host_bootstrap_ssh(
                 console.err(str(exc))
                 raise typer.Exit(code=2)
 
-        activation = None
-        if not no_license and lic_url:
-            if not license_key:
-                console.err("Missing required flag: --license-key (or pass --no-license).")
-                raise typer.Exit(code=2)
-            if entitlements is None:
-                try:
-                    entitlements = resolve_entitlements(lic_url, license_key)
-                except LicenseEntitlementsError as exc:
-                    console.err(str(exc))
-                    raise typer.Exit(code=2)
-            if entitlements is not None and not version:
-                _print_entitlement_versions(entitlements)
-            machine_name = _remote_machine_name(session, ssh_host=ssh_host)
-            activation = fetch_registry_creds_from_license(
-                lic_url,
-                license_key=license_key,
-                machine_name=machine_name,
-                resolved_versions=entitlements.resolved_versions if entitlements else None,
-            )
-            if activation.registry_password is None:
-                console.err(
-                    "Registry password not returned (credentials not rotated). Re-run "
-                    "`saharo host bootstrap --license-key <key>` or rebind the license with rotation enabled, then retry."
-                )
-                raise typer.Exit(code=2)
-            registry = activation.registry_url or registry
-
         if version:
             resolved_tag = version
-        elif entitlements is not None:
-            resolved_tag = entitlements.host
         else:
             resolved_tag = tag
 
@@ -704,34 +413,9 @@ def _host_bootstrap_ssh(
         if wipe_data:
             _remote_wipe_host_data(session, inputs, sudo=use_sudo)
 
-        if activation is not None:
-            docker_login_ssh(
-                session,
-                activation.registry_url,
-                activation.registry_username,
-                activation.registry_password or "",
-                sudo=use_sudo,
-            )
-
         _remote_write_files(session, inputs, sudo=use_sudo)
-        if activation is not None and license_key:
-            _write_license_state_remote(
-                session,
-                inputs,
-                sudo=use_sudo,
-                license_key=license_key,
-                activation=activation,
-            )
         _remote_compose_pull_up(session, inputs, sudo=use_sudo)
         verify_health(inputs, ssh_session=session, ssh_host=ssh_host, sudo=use_sudo)
-        if activation is not None and license_key:
-            _remote_bootstrap_license_cache(
-                session,
-                inputs,
-                sudo=use_sudo,
-                license_key=license_key,
-                activation=activation,
-            )
         _remote_bootstrap_admin(session, inputs, sudo=use_sudo)
         verify_health(inputs, ssh_session=session, ssh_host=ssh_host, sudo=use_sudo)
         https_url = _maybe_setup_https_remote(
@@ -1274,137 +958,6 @@ def _remote_bootstrap_admin(session: SSHSession, inputs: BootstrapInputs, *, sud
             console.err("Admin bootstrap failed. Check API logs for details.")
             raise typer.Exit(code=2)
 
-
-def _build_license_snapshot_payload(license_key: str, activation: _RegistryActivation) -> dict:
-    resolved_versions = activation.resolved_versions or {"host": activation.resolved_host_tag}
-    versions_json: dict[str, object] = {"resolved_versions": resolved_versions}
-    if activation.registry_url:
-        versions_json["registry"] = {"url": activation.registry_url}
-    return {
-        "license_key": license_key,
-        "entitlements_json": activation.entitlements_json or {},
-        "versions_json": versions_json,
-    }
-
-
-def _license_state_path(inputs: BootstrapInputs) -> Path:
-    return inputs.host_dir / _LICENSE_STATE_RELATIVE_PATH
-
-
-def _license_state_path_posix(inputs: BootstrapInputs) -> str:
-    return posixpath.join(inputs.host_dir_posix, _LICENSE_STATE_RELATIVE_POSIX)
-
-
-def _build_license_state_payload(license_key: str, activation: _RegistryActivation) -> dict[str, object]:
-    resolved_versions = activation.resolved_versions or {"host": activation.resolved_host_tag}
-    return {
-        "license_key": license_key,
-        "registry": {
-            "url": activation.registry_url,
-            "username": activation.registry_username,
-            "password": activation.registry_password,
-        },
-        "resolved_versions": resolved_versions,
-        "fetched_at": datetime.now(timezone.utc).isoformat(),
-        "last_sync_error": None,
-    }
-
-
-def _write_license_state_local(
-        inputs: BootstrapInputs,
-        *,
-        license_key: str,
-        activation: _RegistryActivation,
-) -> None:
-    path = _license_state_path(inputs)
-    payload = _build_license_state_payload(license_key, activation)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    os.chmod(path.parent, 0o700)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-    os.chmod(path, 0o600)
-    console.ok(f"Wrote license state to {path}")
-
-
-def _write_license_state_remote(
-        session: SSHSession,
-        inputs: BootstrapInputs,
-        *,
-        sudo: bool,
-        license_key: str,
-        activation: _RegistryActivation,
-) -> None:
-    path = _license_state_path_posix(inputs)
-    payload = _build_license_state_payload(license_key, activation)
-    state_dir = shlex.quote(posixpath.dirname(path))
-    res = _remote_run(session, f"mkdir -p {state_dir}", sudo=sudo)
-    if res.returncode != 0:
-        console.err(res.stderr.strip() or "Failed to create license state directory.")
-        raise typer.Exit(code=2)
-    res = _remote_run(session, f"chmod 700 {state_dir}", sudo=sudo)
-    if res.returncode != 0:
-        console.err(res.stderr.strip() or "Failed to set license state directory permissions.")
-        raise typer.Exit(code=2)
-    res = _remote_run_input(
-        session,
-        f"cat > {shlex.quote(path)}",
-        json.dumps(payload, indent=2, sort_keys=True),
-        log_label="write license state",
-        sudo=sudo,
-    )
-    if res.returncode != 0:
-        console.err(res.stderr.strip() or "Failed to write license state file.")
-        raise typer.Exit(code=2)
-    res = _remote_run(session, f"chmod 600 {shlex.quote(path)}", sudo=sudo)
-    if res.returncode != 0:
-        console.err(res.stderr.strip() or "Failed to set license state permissions.")
-        raise typer.Exit(code=2)
-    console.ok(f"Wrote license state to {path}")
-
-
-def _remote_bootstrap_license_cache(
-        session: SSHSession,
-        inputs: BootstrapInputs,
-        *,
-        sudo: bool,
-        license_key: str,
-        activation: _RegistryActivation,
-) -> None:
-    payload = _build_license_snapshot_payload(license_key, activation)
-    headers = {
-        "Content-Type": "application/json",
-        "X-Root-Secret": inputs.x_root_secret,
-    }
-    url = f"{inputs.api_base}/admin/license/bootstrap"
-    console.info("Saving license snapshot...")
-    with _remote_temporary_root_secret(session, inputs, sudo=sudo):
-        for attempt in range(1, 6):
-            status, body = _remote_http_post_json(session, url, payload, headers)
-            if status is None:
-                if attempt < 5:
-                    console.warn("Failed to reach license bootstrap endpoint. Retrying...")
-                    time.sleep(1)
-                    continue
-                console.err("Failed to reach license bootstrap endpoint.")
-                raise typer.Exit(code=2)
-            if status == 200:
-                console.ok("License snapshot saved.")
-                return
-            if status == 403 and body and "root secret" in body.lower():
-                console.err("Invalid root secret for license bootstrap.")
-                raise typer.Exit(code=2)
-            if status == 403:
-                console.err("Invalid or revoked license key.")
-                raise typer.Exit(code=2)
-            if status == 503:
-                console.err("License API is unreachable. Re-run host bootstrap when it is available.")
-                raise typer.Exit(code=2)
-            _report_bootstrap_http_error(status, body)
-            if attempt < 5:
-                console.warn("License bootstrap did not succeed yet. Retrying...")
-                time.sleep(1)
-                continue
-            console.err("License bootstrap failed. Check API logs for details.")
-            raise typer.Exit(code=2)
 
 
 def _remote_http_post_json(
@@ -1992,47 +1545,6 @@ def bootstrap_admin(inputs: BootstrapInputs) -> None:
                 time.sleep(1)
                 continue
             console.err("Admin bootstrap failed. Check API logs for details.")
-            raise typer.Exit(code=2)
-
-
-def bootstrap_license_cache(inputs: BootstrapInputs, *, license_key: str, activation: _RegistryActivation) -> None:
-    payload = _build_license_snapshot_payload(license_key, activation)
-    headers = {
-        "Content-Type": "application/json",
-        "X-Root-Secret": inputs.x_root_secret,
-    }
-    url = f"{inputs.api_base}/admin/license/bootstrap"
-    console.info("Saving license snapshot...")
-    with _temporary_root_secret(inputs):
-        for attempt in range(1, 6):
-            try:
-                response = httpx.post(url, headers=headers, json=payload, timeout=10.0)
-            except httpx.RequestError:
-                if attempt < 5:
-                    console.warn("Failed to reach license bootstrap endpoint. Retrying...")
-                    time.sleep(1)
-                    continue
-                console.err("Failed to reach license bootstrap endpoint.")
-                raise typer.Exit(code=2)
-
-            if response.status_code == 200:
-                console.ok("License snapshot saved.")
-                return
-            if response.status_code == 403 and "root secret" in response.text.lower():
-                console.err("Invalid root secret for license bootstrap.")
-                raise typer.Exit(code=2)
-            if response.status_code == 403:
-                console.err("Invalid or revoked license key.")
-                raise typer.Exit(code=2)
-            if response.status_code == 503:
-                console.err("License API is unreachable. Re-run host bootstrap when it is available.")
-                raise typer.Exit(code=2)
-            _report_bootstrap_http_error(response.status_code, response.text, response)
-            if attempt < 5:
-                console.warn("License bootstrap did not succeed yet. Retrying...")
-                time.sleep(1)
-                continue
-            console.err("License bootstrap failed. Check API logs for details.")
             raise typer.Exit(code=2)
 
 
