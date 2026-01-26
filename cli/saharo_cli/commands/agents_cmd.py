@@ -457,10 +457,10 @@ def install_agent(
         if dry_run:
             pwd = None
         else:
-            pwd = typer.prompt("SSH password", hide_input=True)
+            pwd = typer.prompt("SSH password (input hidden)", hide_input=True)
     sudo_pwd = None
     if sudo_password and not dry_run:
-        sudo_pwd = typer.prompt("Sudo password", hide_input=True)
+        sudo_pwd = typer.prompt("Sudo password (input hidden)", hide_input=True)
 
     if local:
         if is_windows():

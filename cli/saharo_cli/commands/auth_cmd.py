@@ -19,7 +19,13 @@ app = typer.Typer(help="Auth commands.")
 @app.command("login")
 def login(
         username: str = typer.Option(..., "--username", prompt=True, help="Username for login."),
-        password: str = typer.Option(..., "--password", prompt=True, hide_input=True, help="Password for login."),
+        password: str = typer.Option(
+            ...,
+            "--password",
+            prompt="Password (input hidden)",
+            hide_input=True,
+            help="Password for login.",
+        ),
         base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
 ):
     cfg = load_config()
@@ -40,7 +46,13 @@ def login(
 
 @app.command("login-api-key")
 def login_api_key(
-        api_key: str = typer.Option(..., "--api-key", prompt=True, hide_input=True, help="API key for login."),
+        api_key: str = typer.Option(
+            ...,
+            "--api-key",
+            prompt="API key (input hidden)",
+            hide_input=True,
+            help="API key for login.",
+        ),
         base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
 ):
     cfg = load_config()

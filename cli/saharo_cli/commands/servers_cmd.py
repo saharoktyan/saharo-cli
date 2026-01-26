@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 import typer
 from rich import box
 from rich.panel import Panel
+from rich.prompt import Confirm
 from rich.table import Table
 from rich.text import Text
 from saharo_client import ApiError, AuthError, NetworkError
@@ -47,6 +48,9 @@ PROTOCOL_SERVICE_MAP = {
     "xray": "xray",
 }
 
+DEFAULT_AGENT_HEARTBEAT_INTERVAL_S = 30
+DEFAULT_AGENT_POLL_INTERVAL_S = 10
+
 
 def _resolve_agent_version_from_host_api(cfg, base_url_override: str | None) -> tuple[str, str | None]:
     client = make_client(cfg, profile=None, base_url_override=base_url_override)
@@ -74,6 +78,52 @@ def _resolve_agent_version_from_host_api(cfg, base_url_override: str | None) -> 
     if registry_url:
         registry_url = normalize_registry_host(registry_url) or None
     return agent_tag.strip(), registry_url
+
+
+def _render_agent_env(
+        *,
+        agent_api_url: str,
+        invite_token: str,
+        registry_url: str,
+        registry_username: str,
+        registry_password: str,
+        agent_version: str,
+        heartbeat_interval_s: int,
+        poll_interval_s: int,
+        force_reregister: bool,
+) -> str:
+    lines = [
+        f"AGENT_API_BASE={agent_api_url}",
+        f"SAHARO_AGENT_INVITE={invite_token}",
+        f"REGISTRY_URL={registry_url}",
+        f"REGISTRY_USERNAME={registry_username}",
+        f"REGISTRY_PASSWORD={registry_password}",
+        f"AGENT_VERSION={agent_version}",
+        f"AGENT_HEARTBEAT_INTERVAL_S={heartbeat_interval_s}",
+        f"AGENT_POLL_INTERVAL_S={poll_interval_s}",
+    ]
+    if force_reregister:
+        lines.append("SAHARO_AGENT_FORCE_REREGISTER=1")
+    return "\n".join(lines) + "\n"
+
+
+def _render_agent_readme(*, compose_path: str) -> str:
+    return "\n".join(
+        [
+            "Saharo Agent (runtime)",
+            "",
+            "Manage services:",
+            f"  docker compose -f {compose_path} ps",
+            f"  docker compose -f {compose_path} logs -f http-agent",
+            f"  docker compose -f {compose_path} restart http-agent",
+            "",
+            "Stop services:",
+            f"  docker compose -f {compose_path} down",
+            "",
+            "Start services:",
+            f"  docker compose -f {compose_path} up -d",
+        ]
+    ) + "\n"
 
 
 def _fetch_registry_creds_from_host_api(
@@ -1043,6 +1093,16 @@ def bootstrap(
         api_url: str | None = typer.Option(None, "--api-url", help="Override API base URL for the runtime."),
         force_reregister: bool = typer.Option(False, "--force-reregister",
                                               help="Force re-register even if state exists."),
+        heartbeat_interval_s: int = typer.Option(
+            DEFAULT_AGENT_HEARTBEAT_INTERVAL_S,
+            "--heartbeat-interval",
+            help="Agent heartbeat interval in seconds.",
+        ),
+        poll_interval_s: int = typer.Option(
+            DEFAULT_AGENT_POLL_INTERVAL_S,
+            "--poll-interval",
+            help="Agent job poll interval in seconds.",
+        ),
         force: bool = typer.Option(False, "--force", help="Legacy: reinstall protocol even if container exists."),
         register_timeout: int = typer.Option(agents_cmd.REGISTRATION_TIMEOUT_S, "--register-timeout",
                                              help="Registration wait timeout in seconds."),
@@ -1067,6 +1127,9 @@ def bootstrap(
     Example:
       saharo servers bootstrap --name my-vps --host 203.0.113.10 --ssh root@203.0.113.10 --sudo
     """
+    ssh_password_value = None
+    sudo_password_value = None
+
     if protocol:
         if not server_ref:
             console.err("--server is required when using protocol bootstrap.")
@@ -1088,18 +1151,86 @@ def bootstrap(
         console.err("--server is only valid with protocol bootstrap.")
         raise typer.Exit(code=2)
 
-    if not name or not host:
-        console.err("--name and --host are required for server bootstrap.")
+    use_wizard = not name or not host or (not local and not ssh_target)
+    if use_wizard:
+        console.rule("[bold]Saharo Server Bootstrap[/]")
+    if not name:
+        name = typer.prompt("Server name")
+    if not host:
+        host = typer.prompt("Server host (IP or DNS)")
+    if heartbeat_interval_s <= 0:
+        console.err("--heartbeat-interval must be a positive integer.")
         raise typer.Exit(code=2)
+    if poll_interval_s <= 0:
+        console.err("--poll-interval must be a positive integer.")
+        raise typer.Exit(code=2)
+    if use_wizard:
+        heartbeat_interval_s = typer.prompt(
+            "Agent heartbeat interval (seconds)",
+            default=DEFAULT_AGENT_HEARTBEAT_INTERVAL_S,
+        )
+        poll_interval_s = typer.prompt(
+            "Agent job poll interval (seconds)",
+            default=DEFAULT_AGENT_POLL_INTERVAL_S,
+        )
+        if heartbeat_interval_s <= 0:
+            console.err("Heartbeat interval must be a positive integer.")
+            raise typer.Exit(code=2)
+        if poll_interval_s <= 0:
+            console.err("Poll interval must be a positive integer.")
+            raise typer.Exit(code=2)
     if local and ssh_target:
         console.err("--local cannot be combined with --ssh.")
         raise typer.Exit(code=2)
+    if not local and not ssh_target:
+        if is_windows():
+            console.err("Local server bootstrap is not supported on Windows. Use SSH to connect to a Linux host.")
+            raise typer.Exit(code=2)
+        if not Confirm.ask("Install agent locally on this machine?", default=False):
+            ssh_host = typer.prompt("SSH host (e.g. 203.0.113.10)")
+            ssh_user = typer.prompt("SSH user", default="root")
+            ssh_target = f"{ssh_user}@{ssh_host}" if ssh_user else ssh_host
+        else:
+            local = True
     if local and is_windows():
         console.err("Local server bootstrap is not supported on Windows. Use --ssh to connect to a Linux host.")
         raise typer.Exit(code=2)
     if not local and not ssh_target:
         console.err("--ssh is required unless --local is set.")
         raise typer.Exit(code=2)
+    if not local:
+        if not key and not password:
+            key_input = typer.prompt(
+                "SSH private key path (leave blank to use password)",
+                default="",
+                show_default=False,
+            )
+            key = key_input.strip() or None
+            if not key:
+                password = True
+        if password and not dry_run:
+            ssh_password_value = typer.prompt("SSH password (input hidden)", hide_input=True)
+            password = False
+        ssh_user = ssh_target.split("@", 1)[0] if "@" in ssh_target else ""
+        if ssh_user and ssh_user != "root" and not sudo:
+            if not Confirm.ask(
+                "Remote user is not root. Use sudo privileges (required)?",
+                default=True,
+            ):
+                console.err("Sudo privileges are required to install the agent.")
+                raise typer.Exit(code=2)
+            sudo = True
+        if sudo and not dry_run and not sudo_password:
+            sudo_password_value = typer.prompt(
+                "Sudo password (input hidden, leave blank if none)",
+                default="",
+                show_default=False,
+                hide_input=True,
+            )
+            if sudo_password_value and sudo_password_value.strip():
+                sudo_password = False
+            else:
+                sudo_password_value = None
     if register_timeout <= 0:
         console.err("--register-timeout must be a positive integer.")
         raise typer.Exit(code=2)
@@ -1154,21 +1285,27 @@ def bootstrap(
             agents_cmd._cleanup_agent_installation_local(allow_existing_state=False, label="bootstrap")
             env_path = f"{compose_dir}/.env"
             registry_url, registry_username, registry_password = _require_registry_activation(cfg, base_url)
-            env_content = (
-                f"AGENT_API_BASE={agent_api_url}\n"
-                f"SAHARO_AGENT_INVITE={invite_token}\n"
-                f"REGISTRY_URL={registry_url}\n"
-                f"REGISTRY_USERNAME={registry_username}\n"
-                f"REGISTRY_PASSWORD={registry_password}\n"
+            env_content = _render_agent_env(
+                agent_api_url=agent_api_url,
+                invite_token=invite_token,
+                registry_url=registry_url,
+                registry_username=registry_username,
+                registry_password=registry_password,
+                agent_version=resolved_tag,
+                heartbeat_interval_s=heartbeat_interval_s,
+                poll_interval_s=poll_interval_s,
+                force_reregister=force_reregister,
             )
-            if force_reregister:
-                env_content += "SAHARO_AGENT_FORCE_REREGISTER=1\n"
             with open(env_path, "w", encoding="utf-8") as f:
                 f.write(env_content)
+            os.chmod(env_path, 0o600)
             compose_content = agents_cmd._render_agent_compose(registry, resolved_tag)
             compose_path = os.path.join(compose_dir, "docker-compose.yml")
             with open(compose_path, "w", encoding="utf-8") as f:
                 f.write(compose_content)
+            readme_path = os.path.join(compose_dir, "README.txt")
+            with open(readme_path, "w", encoding="utf-8") as f:
+                f.write(_render_agent_readme(compose_path=compose_path))
             res = runner(f"cd {compose_dir} && {compose_cmd} pull")
             if res.returncode != 0:
                 console.err((res.stderr or "").strip() or "Failed to pull bootstrap container.")
@@ -1185,7 +1322,9 @@ def bootstrap(
             agent_id = _require_registration(reg_result, timeout_s=register_timeout)
     else:
         pwd = None
-        if password:
+        if ssh_password_value is not None:
+            pwd = ssh_password_value
+        elif password:
             if is_windows():
                 console.err(
                     "Password SSH authentication is not supported on Windows. "
@@ -1193,10 +1332,12 @@ def bootstrap(
                 )
                 raise typer.Exit(code=2)
             if not dry_run:
-                pwd = typer.prompt("SSH password", hide_input=True)
+                pwd = typer.prompt("SSH password (input hidden)", hide_input=True)
         sudo_pwd = None
-        if sudo_password and not dry_run:
-            sudo_pwd = typer.prompt("Sudo password", hide_input=True)
+        if sudo_password_value is not None:
+            sudo_pwd = sudo_password_value
+        elif sudo_password and not dry_run:
+            sudo_pwd = typer.prompt("Sudo password (input hidden)", hide_input=True)
 
         agent_api_url = agents_cmd._resolve_agent_api_url(effective_base_url, api_url)
         target = agents_cmd.SshTarget(
@@ -1283,15 +1424,17 @@ def bootstrap(
                     console.err(res.stderr.strip() or "Failed to write docker-compose.yml.")
                     raise typer.Exit(code=2)
 
-                env_content = (
-                    f"AGENT_API_BASE={agent_api_url}\n"
-                    f"SAHARO_AGENT_INVITE={invite_token}\n"
-                    f"REGISTRY_URL={registry_url}\n"
-                    f"REGISTRY_USERNAME={registry_username}\n"
-                    f"REGISTRY_PASSWORD={registry_password}\n"
+                env_content = _render_agent_env(
+                    agent_api_url=agent_api_url,
+                    invite_token=invite_token,
+                    registry_url=registry_url,
+                    registry_username=registry_username,
+                    registry_password=registry_password,
+                    agent_version=resolved_tag,
+                    heartbeat_interval_s=heartbeat_interval_s,
+                    poll_interval_s=poll_interval_s,
+                    force_reregister=force_reregister,
                 )
-                if force_reregister:
-                    env_content += "SAHARO_AGENT_FORCE_REREGISTER=1\n"
                 if sudo:
                     res = session.run_input_privileged(f"cat > {env_path_q}", env_content, log_label="write .env")
                 else:
@@ -1303,6 +1446,24 @@ def bootstrap(
                 res = session.run_privileged(chmod_cmd) if sudo else session.run(chmod_cmd)
                 if res.returncode != 0:
                     console.err(res.stderr.strip() or "Failed to set .env permissions.")
+                    raise typer.Exit(code=2)
+                readme_content = _render_agent_readme(compose_path=compose_path)
+                readme_path = posixpath.join(base_dir, "README.txt")
+                readme_path_q = shlex.quote(readme_path)
+                if sudo:
+                    res = session.run_input_privileged(
+                        f"cat > {readme_path_q}",
+                        readme_content,
+                        log_label="write README.txt",
+                    )
+                else:
+                    res = session.run_input(
+                        f"cat > {readme_path_q}",
+                        readme_content,
+                        log_label="write README.txt",
+                    )
+                if res.returncode != 0:
+                    console.err(res.stderr.strip() or "Failed to write README.txt.")
                     raise typer.Exit(code=2)
 
                 agents_cmd._check_remote_api_health(session, agent_api_url, sudo=sudo)
@@ -1430,4 +1591,3 @@ def bootstrap(
         status = status_payload.get("status") or ("online" if status_payload.get("online") else "offline")
         console.info(f"Heartbeat status: {status}")
     console.info(f"Next: saharo servers status {server_id}")
-

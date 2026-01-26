@@ -283,7 +283,7 @@ def _https_setup_remote(
             )
             raise typer.Exit(code=2)
         console.info("SSH password required for remote host.")
-        ssh_password = typer.prompt("SSH password", hide_input=True)
+        ssh_password = typer.prompt("SSH password (input hidden)", hide_input=True)
 
     ssh_user = ssh_host.split("@", 1)[0] if "@" in ssh_host else ""
     use_sudo = ssh_sudo and ssh_user != "root"
@@ -336,7 +336,7 @@ def _ensure_remote_sudo(session: SSHSession, target: SshTarget) -> None:
     if "not in the sudoers file" in stderr or "is not allowed to run sudo" in stderr:
         raise RuntimeError("Remote user does not have sufficient privileges (sudo required)")
     console.info("Sudo password required for remote host.")
-    sudo_password = typer.prompt("Sudo password", hide_input=True)
+    sudo_password = typer.prompt("Sudo password (input hidden)", hide_input=True)
     verify = session.run_input("sudo -S -p '' true", f"{sudo_password}\n", log_label="sudo check")
     if verify.returncode != 0:
         raise RuntimeError("Sudo authentication failed.")

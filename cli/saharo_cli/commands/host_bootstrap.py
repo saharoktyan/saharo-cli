@@ -399,6 +399,35 @@ def host_bootstrap(
         console.err("Local host bootstrap is not supported on Windows. Use --ssh-host to connect to a Linux host.")
         raise typer.Exit(code=2)
 
+    if not ssh_host and not non_interactive:
+        if is_windows():
+            console.info("Local host bootstrap is not supported on Windows.")
+            ssh_host_input = typer.prompt("SSH host (e.g. 203.0.113.10)")
+            ssh_user = typer.prompt("SSH user", default="root")
+            ssh_host = f"{ssh_user}@{ssh_host_input}" if ssh_user else ssh_host_input
+        elif Confirm.ask("Install on a remote host via SSH?", default=False):
+            ssh_host_input = typer.prompt("SSH host (e.g. 203.0.113.10)")
+            ssh_user = typer.prompt("SSH user", default="root")
+            ssh_host = f"{ssh_user}@{ssh_host_input}" if ssh_user else ssh_host_input
+        if ssh_host:
+            ssh_port = typer.prompt("SSH port", default=ssh_port)
+            if not ssh_key:
+                key_input = typer.prompt(
+                    "SSH private key path (leave blank to use password)",
+                    default="",
+                    show_default=False,
+                )
+                ssh_key = key_input.strip() or None
+            ssh_user = ssh_host.split("@", 1)[0] if "@" in ssh_host else ""
+            if ssh_user and ssh_user != "root" and not ssh_sudo:
+                if not Confirm.ask(
+                    "Remote user is not root. Use sudo privileges (required)?",
+                    default=True,
+                ):
+                    console.err("Sudo privileges are required to install the host.")
+                    raise typer.Exit(code=2)
+                ssh_sudo = True
+
     if ssh_host:
         install_dir = _normalize_remote_install_dir(install_dir)
 
@@ -415,7 +444,7 @@ def host_bootstrap(
         if non_interactive:
             console.err("Missing required flag: --license-key (or pass --no-license).")
             raise typer.Exit(code=2)
-        license_key = typer.prompt("License key", hide_input=True)
+        license_key = typer.prompt("License key (input hidden)", hide_input=True)
         if not (license_key or "").strip():
             console.err("ERR License key is required (or pass --no-license / --tag / --version).")
             raise typer.Exit(code=2)
@@ -589,7 +618,7 @@ def _host_bootstrap_ssh(
             console.err("Missing required SSH authentication. Provide --ssh-key or allow password prompt.")
             raise typer.Exit(code=2)
         console.info("SSH password required for remote host.")
-        ssh_password = typer.prompt("SSH password", hide_input=True)
+        ssh_password = typer.prompt("SSH password (input hidden)", hide_input=True)
 
     ssh_user = ssh_host.split("@", 1)[0] if "@" in ssh_host else ""
     use_sudo = ssh_sudo and ssh_user != "root"
@@ -803,13 +832,13 @@ def collect_inputs(
     if not api_url:
         api_url = typer.prompt("Public API URL (e.g. https://api.example.com)")
     if not x_root_secret:
-        x_root_secret = typer.prompt("Root secret for admin bootstrap", hide_input=True)
+        x_root_secret = typer.prompt("Root secret for admin bootstrap (input hidden)", hide_input=True)
     if not db_password:
-        db_password = typer.prompt("Postgres password", hide_input=True)
+        db_password = typer.prompt("Postgres password (input hidden)", hide_input=True)
     if not admin_username:
         admin_username = typer.prompt("Admin username")
     if not admin_password:
-        admin_password = typer.prompt("Admin password", hide_input=True, confirmation_prompt=True)
+        admin_password = typer.prompt("Admin password (input hidden)", hide_input=True, confirmation_prompt=True)
     if telegram_bot_token is None and not non_interactive:
         telegram_bot_token = typer.prompt(
             "Telegram bot token (optional, press Enter to skip)",
@@ -935,7 +964,7 @@ def _ensure_remote_sudo(session: SSHSession, target: SshTarget, *, non_interacti
     if non_interactive:
         raise RuntimeError("Sudo requires a password. Re-run without --non-interactive.")
     console.info("Sudo password required for remote host.")
-    sudo_password = typer.prompt("Sudo password", hide_input=True)
+    sudo_password = typer.prompt("Sudo password (input hidden)", hide_input=True)
     verify = session.run_input("sudo -S -p '' true", f"{sudo_password}\n", log_label="sudo check")
     if verify.returncode != 0:
         raise RuntimeError("Sudo authentication failed.")

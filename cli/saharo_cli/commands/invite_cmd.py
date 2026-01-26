@@ -93,8 +93,8 @@ def _prompt_password_with_confirmation(
     password = initial_password
     while attempts < max_attempts:
         if password is None:
-            password = typer.prompt("Password", hide_input=True)
-        confirm = typer.prompt("Confirm password", hide_input=True)
+            password = typer.prompt("Password (input hidden)", hide_input=True)
+        confirm = typer.prompt("Confirm password (input hidden)", hide_input=True)
         if not password or not password.strip():
             console.err("Password cannot be empty.")
             attempts += 1
