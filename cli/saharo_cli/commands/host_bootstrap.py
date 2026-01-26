@@ -432,7 +432,7 @@ def host_bootstrap(
                 if Confirm.ask("Use an SSH private key for authentication?", default=True):
                     key_input = typer.prompt(
                         "SSH private key path",
-                        default="~/.ssh/id_ed_25519",
+                        default="~/.ssh/id_ed25519",
                     )
                     try:
                         ssh_key = _validate_ssh_key_path(key_input)
