@@ -13,6 +13,8 @@ from urllib.parse import urlparse
 import typer
 from rich.table import Table
 from saharo_client import ApiError, NetworkError
+from saharo_client.errors_utils import parse_api_error_detail
+from saharo_client.resolve import resolve_agent_id_for_agents
 
 from .host_bootstrap import DEFAULT_REGISTRY, normalize_registry_host
 from .. import console
@@ -25,6 +27,7 @@ from ..license_resolver import (
     LicenseEntitlementsError,
     resolve_entitlements,
 )
+from saharo_client.registry import resolve_agent_version_from_license_payload
 from ..registry_store import load_registry
 from ..ssh import SshTarget, SSHSession, build_control_path, _ensure_sudo_mode, _sudo_prefix, is_windows
 
@@ -61,25 +64,11 @@ def _resolve_agent_version_from_host_api(cfg: AppConfig) -> tuple[str, str | Non
     finally:
         client.close()
 
-    versions = data.get("versions") if isinstance(data, dict) else {}
-    if not isinstance(versions, dict):
+    result = resolve_agent_version_from_license_payload(data if isinstance(data, dict) else {})
+    if not result:
         return None
-
-    resolved_versions = versions.get("resolved_versions")
-    if not isinstance(resolved_versions, dict):
-        resolved_versions = versions
-    agent_tag = resolved_versions.get("agent")
-    if not isinstance(agent_tag, str) or not agent_tag.strip():
-        return None
-
-    registry_url = None
-    registry = versions.get("registry")
-    if isinstance(registry, dict):
-        reg_url = str(registry.get("url") or "").strip()
-        if reg_url:
-            registry_url = normalize_registry_host(reg_url) or None
-
-    return agent_tag.strip(), registry_url
+    tag, registry_url = result
+    return tag, normalize_registry_host(registry_url) if registry_url else None
 
 
 @app.command("list")
@@ -719,35 +708,11 @@ def _resolve_local_agent_api_url(base_url: str, api_url_override: str | None) ->
 
 
 def _parse_api_error_detail(details: str | None) -> dict | None:
-    if not details:
-        return None
-    try:
-        return json.loads(details)
-    except Exception:
-        return None
+    return parse_api_error_detail(details)
 
 
 def _resolve_agent_id(client, agent_name_or_id: str) -> int:
-    value = str(agent_name_or_id).strip()
-    if value.isdigit():
-        return int(value)
-    page_size = 200
-    offset = 0
-    while True:
-        data = client.admin_agents_list(include_deleted=False, limit=page_size, offset=offset)
-        items = data.get("items") if isinstance(data, dict) else []
-        matches = [a for a in (items or []) if str(a.get("name") or "").strip() == value]
-        if matches:
-            if len(matches) > 1:
-                raise ApiError(409, f"multiple agents named {value}")
-            return int(matches[0]["id"])
-        total = data.get("total") if isinstance(data, dict) else None
-        if total is None:
-            break
-        offset += page_size
-        if offset >= total:
-            break
-    raise ApiError(404, f"agent {value} not found")
+    return resolve_agent_id_for_agents(client, agent_name_or_id)
 
 
 @dataclass

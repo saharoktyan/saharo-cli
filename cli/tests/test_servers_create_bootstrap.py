@@ -7,23 +7,46 @@ import typer
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-fake_client_mod = types.ModuleType("saharo_client")
+try:
+    import saharo_client  # noqa: F401
+except ImportError:
+    fake_client_mod = types.ModuleType("saharo_client")
 
+    class _FakeApiError(Exception):
+        def __init__(self, status_code: int, message: str, details: str | None = None) -> None:
+            super().__init__(message)
+            self.status_code = status_code
+            self.details = details
 
-class _FakeApiError(Exception):
-    def __init__(self, status_code: int, message: str, details: str | None = None) -> None:
-        super().__init__(message)
-        self.status_code = status_code
-        self.details = details
+    fake_client_mod.ApiError = _FakeApiError
+    fake_client_mod.AuthError = type("AuthError", (Exception,), {})
+    fake_client_mod.NetworkError = type("NetworkError", (Exception,), {})
+    fake_client_mod.SaharoClient = object
+    sys.modules["saharo_client"] = fake_client_mod
 
+    fake_config_mod = types.ModuleType("saharo_client.config_types")
+    fake_config_mod.ClientConfig = type("ClientConfig", (), {})
+    sys.modules["saharo_client.config_types"] = fake_config_mod
 
-fake_client_mod.ApiError = _FakeApiError
-fake_client_mod.SaharoClient = object
-sys.modules["saharo_client"] = fake_client_mod
+    fake_registry_mod = types.ModuleType("saharo_client.registry")
+    fake_registry_mod.resolve_agent_version_from_license_payload = lambda *_args, **_kwargs: ("", None)
+    fake_registry_mod.extract_registry_creds_from_snapshot = lambda *_args, **_kwargs: None
+    sys.modules["saharo_client.registry"] = fake_registry_mod
 
-fake_config_mod = types.ModuleType("saharo_client.config_types")
-fake_config_mod.ClientConfig = type("ClientConfig", (), {})
-sys.modules["saharo_client.config_types"] = fake_config_mod
+    fake_jobs_mod = types.ModuleType("saharo_client.jobs")
+    fake_jobs_mod.wait_job = lambda *_args, **_kwargs: {}
+    fake_jobs_mod.job_status_hint = lambda *_args, **_kwargs: ""
+    sys.modules["saharo_client.jobs"] = fake_jobs_mod
+
+    fake_polling_mod = types.ModuleType("saharo_client.polling")
+    fake_polling_mod.wait_for_server_heartbeat = lambda *_args, **_kwargs: {}
+    sys.modules["saharo_client.polling"] = fake_polling_mod
+
+    fake_resolve_mod = types.ModuleType("saharo_client.resolve")
+    fake_resolve_mod.ResolveError = type("ResolveError", (Exception,), {})
+    fake_resolve_mod.resolve_server_id_for_servers = lambda *_args, **_kwargs: 0
+    fake_resolve_mod.find_server_by_name = lambda *_args, **_kwargs: None
+    sys.modules["saharo_client.resolve"] = fake_resolve_mod
 sys.modules.setdefault("tomli_w", types.SimpleNamespace(dumps=lambda *_args, **_kwargs: ""))
 
 from saharo_cli.commands import servers_cmd

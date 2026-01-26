@@ -5,11 +5,10 @@ from importlib import metadata
 from typing import Any
 
 from saharo_client import ApiError, NetworkError, SaharoClient
+from saharo_client.compat import evaluate_compatibility
 from saharo_client.config_types import ClientConfig
 
 from .console import err, warn
-from .semver import is_version_in_range
-
 _CHECK_CACHE: dict[str, dict[str, Any]] = {}
 
 
@@ -48,19 +47,24 @@ def ensure_hub_compatibility(base_url: str, *, warn_only: bool = False) -> dict[
         warn("Compatibility check skipped: invalid /version response.")
         return None
 
-    supported_range = str(data.get("supported_cli_range") or "").strip()
-    api_protocol = data.get("api_protocol")
-    api_version = str(data.get("api_version") or data.get("version") or "").strip()
     current_version = cli_version()
     current_protocol = cli_protocol()
+    compat = evaluate_compatibility(
+        data,
+        current_version=current_version,
+        current_protocol=current_protocol,
+    )
+    supported_range = compat.get("supported_range")
+    api_protocol = compat.get("api_protocol")
+    api_version = compat.get("api_version") or ""
 
     incompatible = False
-    if supported_range and not is_version_in_range(current_version, supported_range):
+    if "cli_version_incompatible" in compat.get("reasons", []):
         incompatible = True
         err(
             f"Incompatible CLI version: requires {supported_range}, current {current_version}."
         )
-    if api_protocol is not None and int(api_protocol) != int(current_protocol):
+    if "cli_protocol_incompatible" in compat.get("reasons", []):
         incompatible = True
         err(
             f"Incompatible CLI protocol: requires {api_protocol}, current {current_protocol}."

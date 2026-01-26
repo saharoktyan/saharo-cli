@@ -6,6 +6,7 @@ from typing import Iterable
 
 import typer
 from saharo_client import ApiError
+from saharo_client.resolve import resolve_agent_id_for_logs, resolve_server_id_for_logs
 
 from .. import console
 from ..config import load_config
@@ -133,40 +134,11 @@ def logs_server(
 
 
 def _resolve_agent_id(client, agent_name_or_id: str) -> int:
-    value = str(agent_name_or_id).strip()
-    if value.isdigit():
-        return int(value)
-    page_size = 200
-    offset = 0
-    while True:
-        data = client.admin_agents_list(include_deleted=False, limit=page_size, offset=offset)
-        items = data.get("items") if isinstance(data, dict) else []
-        matches = [a for a in (items or []) if str(a.get("name") or "").strip() == value]
-        if matches:
-            if len(matches) > 1:
-                raise ApiError(409, f"multiple runtimes named {value}")
-            return int(matches[0]["id"])
-        total = data.get("total") if isinstance(data, dict) else None
-        if total is None:
-            break
-        offset += page_size
-        if offset >= total:
-            break
-    raise ApiError(404, f"runtime {value} not found")
+    return resolve_agent_id_for_logs(client, agent_name_or_id)
 
 
 def _resolve_server_id(client, server_name_or_id: str) -> int:
-    value = str(server_name_or_id).strip()
-    if value.isdigit():
-        return int(value)
-    data = client.admin_servers_list(q=value, limit=50, offset=0)
-    items = data.get("items") if isinstance(data, dict) else []
-    matches = [s for s in (items or []) if str(s.get("name") or "").strip() == value]
-    if not matches:
-        raise ApiError(404, f"server {value} not found")
-    if len(matches) > 1:
-        raise ApiError(409, f"multiple servers named {value}")
-    return int(matches[0]["id"])
+    return resolve_server_id_for_logs(client, server_name_or_id)
 
 
 def _tail_remote_logs(

@@ -3,6 +3,7 @@ from __future__ import annotations
 import typer
 from rich.table import Table
 from saharo_client import ApiError
+from saharo_client.resolve import ResolveError, resolve_user_id_for_users
 
 from .invite_cmd import create_invite
 from .. import console
@@ -15,23 +16,11 @@ app.command("invite")(create_invite)
 
 
 def _resolve_user_id(client, user_id: int | None, username: str | None) -> int:
-    if user_id is not None:
-        return int(user_id)
-    username = (username or "").strip()
-    if not username:
-        console.err("User id or --u username is required.")
+    try:
+        return resolve_user_id_for_users(client, user_id, username)
+    except ResolveError as exc:
+        console.err(str(exc))
         raise typer.Exit(code=2)
-    data = client.admin_users_list(q=username, limit=10, offset=0)
-    items = data.get("items") if isinstance(data, dict) else []
-    matches = [u for u in items or [] if str(u.get("username") or "") == username]
-    if not matches:
-        console.err(f"User not found for username '{username}'.")
-        raise typer.Exit(code=2)
-    if len(matches) > 1:
-        ids = ", ".join(str(u.get("id")) for u in matches)
-        console.err(f"Multiple users matched '{username}': {ids}")
-        raise typer.Exit(code=2)
-    return int(matches[0]["id"])
 
 
 def _print_subscription(sub: dict | None) -> None:

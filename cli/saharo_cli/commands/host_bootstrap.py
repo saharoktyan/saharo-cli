@@ -2430,19 +2430,9 @@ def _print_logs_and_missing_hint(log_text: str, *, tail: int = 30) -> None:
 
 
 def normalize_registry_host(value: str) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    if "://" in text:
-        parsed = urllib.parse.urlparse(text)
-        host = parsed.hostname or ""
-        if parsed.port:
-            host = f"{host}:{parsed.port}"
-        return host
-    parsed = urllib.parse.urlparse(f"//{text}")
-    if parsed.netloc:
-        return parsed.netloc
-    return text.split("/", 1)[0]
+    from saharo_client.registry import normalize_registry_host as _normalize
+
+    return _normalize(value)
 
 
 def docker_login_local(registry_url: str, username: str, password: str) -> None:

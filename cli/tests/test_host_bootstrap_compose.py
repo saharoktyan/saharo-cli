@@ -17,6 +17,7 @@ def _docker_compose_available() -> bool:
 def test_render_compose_indentation_and_config(tmp_path) -> None:
     inputs = BootstrapInputs(
         api_url="https://example.com",
+        api_url_original=None,
         x_root_secret="root-secret",
         db_password="db-pass",
         admin_username="admin",
@@ -55,6 +56,7 @@ def test_render_compose_indentation_and_config(tmp_path) -> None:
 def test_render_env_includes_root_admin_secret(tmp_path) -> None:
     inputs = BootstrapInputs(
         api_url="https://example.com",
+        api_url_original=None,
         x_root_secret="root-secret",
         db_password="db-pass",
         admin_username="admin",

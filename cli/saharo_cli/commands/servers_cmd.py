@@ -5,7 +5,6 @@ import math
 import os
 import posixpath
 import shlex
-import time
 from datetime import datetime, timezone
 
 import typer
@@ -14,6 +13,13 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 from saharo_client import ApiError, AuthError, NetworkError
+from saharo_client.jobs import job_status_hint, wait_job
+from saharo_client.registry import (
+    extract_registry_creds_from_snapshot,
+    resolve_agent_version_from_license_payload,
+)
+from saharo_client.polling import wait_for_server_heartbeat
+from saharo_client.resolve import ResolveError, find_server_by_name, resolve_server_id_for_servers
 
 from . import agents_cmd
 from .host_bootstrap import DEFAULT_REGISTRY, docker_login_ssh, normalize_registry_host
@@ -60,30 +66,13 @@ def _resolve_agent_version_from_host_api(cfg, base_url_override: str | None) -> 
         raise typer.Exit(code=2)
     finally:
         client.close()
-
-    versions = data.get("versions") if isinstance(data, dict) else {}
-    if not isinstance(versions, dict):
-        console.err("Invalid license cache response: missing versions payload.")
-        raise typer.Exit(code=2)
-
-    resolved_versions = versions.get("resolved_versions")
-    if not isinstance(resolved_versions, dict):
-        resolved_versions = versions
-    agent_tag = resolved_versions.get("agent")
-    if not isinstance(agent_tag, str) or not agent_tag.strip():
+    result = resolve_agent_version_from_license_payload(data if isinstance(data, dict) else {})
+    if not result:
         console.err("Invalid license cache response: missing resolved_versions.agent.")
         raise typer.Exit(code=2)
-
-    registry_url = None
-    registry = versions.get("registry")
-    if isinstance(registry, dict):
-        reg_url = str(registry.get("url") or "").strip()
-        if reg_url:
-            registry_url = reg_url
-
+    agent_tag, registry_url = result
     if registry_url:
         registry_url = normalize_registry_host(registry_url) or None
-
     return agent_tag.strip(), registry_url
 
 
@@ -99,23 +88,7 @@ def _fetch_registry_creds_from_host_api(
     finally:
         client.close()
 
-    versions = snapshot.get("versions") if isinstance(snapshot, dict) else None
-    if not isinstance(versions, dict):
-        return None
-    registry = versions.get("registry")
-    if not isinstance(registry, dict):
-        return None
-    registry_url = str(registry.get("url") or "").strip()
-    registry_username = str(registry.get("username") or "").strip()
-    registry_password = registry.get("password")
-    if registry_password is not None and not isinstance(registry_password, str):
-        registry_password = None
-    if not registry_url or not registry_username or not registry_password:
-        return None
-    registry_url = normalize_registry_host(registry_url)
-    if not registry_url:
-        return None
-    return registry_url, registry_username, registry_password
+    return extract_registry_creds_from_snapshot(snapshot if isinstance(snapshot, dict) else {})
 
 
 def _require_registry_activation(cfg, base_url_override: str | None) -> tuple[str, str, str]:
@@ -152,26 +125,24 @@ def _protocol_to_service(proto: str) -> str:
 
 
 def _job_status_hint(job_id: int | None) -> str:
-    if job_id:
-        return f"Check status: saharo jobs get {job_id}"
-    return "Check status: saharo jobs list"
+    return job_status_hint(job_id)
 
 
 def _wait_job(client, job_id: int, *, timeout_s: int = 900, interval_s: int = 5) -> dict:
-    deadline = time.monotonic() + max(0, int(timeout_s))
-    last_status = ""
-    while True:
-        job = client.admin_job_get(int(job_id))
-        status = str(job.get("status") or "").lower()
-        if status and status != last_status:
-            console.info(f"job {job_id}: {status}")
-            last_status = status
-        if status in {"succeeded", "failed", "cancelled"}:
-            return job
-        if time.monotonic() >= deadline:
-            console.err("Job did not finish before timeout.")
-            return job
-        time.sleep(max(1, int(interval_s)))
+    def _on_status(jid: int, status: str) -> None:
+        console.info(f"job {jid}: {status}")
+
+    def _on_timeout(jid: int) -> None:
+        console.err("Job did not finish before timeout.")
+
+    return wait_job(
+        client,
+        job_id,
+        timeout_s=timeout_s,
+        interval_s=interval_s,
+        on_status=_on_status,
+        on_timeout=_on_timeout,
+    )
 
 
 def _resolve_server_id_or_exit(client, server_ref: str) -> int:
@@ -277,6 +248,86 @@ def protocol_bootstrap(
         console.print_json(data)
         return
 
+    job_id = data.get("job_id")
+    console.ok(f"Bootstrap job queued (id={job_id}).")
+    console.info(f"services: {', '.join(data.get('services') or [])}")
+    console.info(_job_status_hint(job_id))
+
+
+def bootstrap_server(
+        server_ref: str,
+        *,
+        xray: bool,
+        awg: bool,
+        all_services: bool,
+        wait: bool,
+        wait_timeout: int = 900,
+        wait_interval: int = 5,
+        base_url: str | None,
+        json_out: bool,
+) -> None:
+    services: list[str] = []
+    if all_services:
+        services = ["xray", "amnezia-awg"]
+    else:
+        if xray:
+            services.append("xray")
+        if awg:
+            services.append("amnezia-awg")
+
+    if not services:
+        console.err("Select at least one service to bootstrap.")
+        raise typer.Exit(code=2)
+
+    cfg = load_config()
+    client = make_client(cfg, profile=None, base_url_override=base_url)
+    try:
+        server_id = _resolve_server_id_or_exit(client, server_ref)
+        data = client.admin_server_bootstrap(server_id, services=services)
+        if wait:
+            job_id = int(data.get("job_id") or 0)
+            if job_id:
+                job = _wait_job(client, job_id, timeout_s=wait_timeout, interval_s=wait_interval)
+                status = str(job.get("status") or "").lower()
+                installed = (
+                    (job.get("result") or {}).get("installed_services")
+                    or (job.get("payload") or {}).get("requested_services")
+                    or services
+                )
+                if isinstance(installed, list):
+                    for svc in installed:
+                        proto_key = SERVICE_PROTOCOL_MAP.get(str(svc))
+                        if not proto_key:
+                            continue
+                        if status == "succeeded":
+                            client.admin_server_protocol_upsert(
+                                server_id,
+                                protocol_key=proto_key,
+                                status="available",
+                                meta={"source": "bootstrap", "service": str(svc)},
+                            )
+                        elif status == "failed":
+                            client.admin_server_protocol_upsert(
+                                server_id,
+                                protocol_key=proto_key,
+                                status="unavailable",
+                                meta={"source": "bootstrap", "service": str(svc)},
+                            )
+    except ApiError as e:
+        if e.status_code == 404:
+            console.err("Server not found.")
+            raise typer.Exit(code=2)
+        if e.status_code in (401, 403):
+            console.err("Unauthorized. Admin access is required.")
+            raise typer.Exit(code=2)
+        console.err(f"Failed to bootstrap server: {e}")
+        raise typer.Exit(code=2)
+    finally:
+        client.close()
+
+    if json_out:
+        console.print_json(data)
+        return
     job_id = data.get("job_id")
     console.ok(f"Bootstrap job queued (id={job_id}).")
     console.info(f"services: {', '.join(data.get('services') or [])}")
@@ -466,33 +517,19 @@ def _age_from_iso(ts: str | None) -> str:
 
 
 def _resolve_server_id(client, server_ref: str) -> int:
-    if server_ref.isdigit():
-        return int(server_ref)
-
-    data = client.admin_servers_list(q=server_ref, limit=50, offset=0)
-    items = data.get("items") if isinstance(data, dict) else []
-    matches = [s for s in items if str(s.get("name")) == server_ref]
-    if not matches:
-        console.err(f"Server '{server_ref}' not found.")
+    try:
+        return resolve_server_id_for_servers(client, server_ref)
+    except ResolveError as exc:
+        console.err(str(exc))
         raise typer.Exit(code=2)
-    if len(matches) > 1:
-        names = ", ".join(str(s.get("id")) for s in matches)
-        console.err(f"Multiple servers matched '{server_ref}': {names}")
-        raise typer.Exit(code=2)
-    return int(matches[0]["id"])
 
 
 def _find_server_by_name(client, name: str) -> dict | None:
-    data = client.admin_servers_list(q=name, limit=50, offset=0)
-    items = data.get("items") if isinstance(data, dict) else []
-    matches = [s for s in items if str(s.get("name")) == name]
-    if not matches:
-        return None
-    if len(matches) > 1:
-        names = ", ".join(str(s.get("id")) for s in matches)
-        console.err(f"Multiple servers matched '{name}': {names}")
+    try:
+        return find_server_by_name(client, name)
+    except ResolveError as exc:
+        console.err(str(exc))
         raise typer.Exit(code=2)
-    return matches[0]
 
 
 def _create_bootstrap_invite(
@@ -591,21 +628,22 @@ def _wait_for_server_heartbeat(
         interval_s: int,
         json_out: bool,
 ) -> dict:
-    deadline = time.monotonic() + max(0, int(timeout_s))
-    last_status = None
-    while True:
-        data = client.admin_server_status(server_id)
-        status = data.get("status") or ("online" if data.get("online") else "offline")
-        if status != last_status and not json_out:
-            console.info(f"server {server_id}: {status}")
-            last_status = status
-        if data.get("online") or data.get("last_heartbeat") or data.get("last_seen_at"):
-            return data
-        if time.monotonic() >= deadline:
-            if not json_out:
-                console.err("No heartbeat detected before timeout.")
-            return data
-        time.sleep(max(1, int(interval_s)))
+    def _on_status(sid: int, status: str) -> None:
+        if not json_out:
+            console.info(f"server {sid}: {status}")
+
+    def _on_timeout(sid: int) -> None:
+        if not json_out:
+            console.err("No heartbeat detected before timeout.")
+
+    return wait_for_server_heartbeat(
+        client,
+        server_id,
+        timeout_s=timeout_s,
+        interval_s=interval_s,
+        on_status=_on_status,
+        on_timeout=_on_timeout,
+    )
 
 
 @app.command("list")
@@ -1392,3 +1430,4 @@ def bootstrap(
         status = status_payload.get("status") or ("online" if status_payload.get("online") else "offline")
         console.info(f"Heartbeat status: {status}")
     console.info(f"Next: saharo servers status {server_id}")
+

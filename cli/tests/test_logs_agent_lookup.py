@@ -11,8 +11,8 @@ def test_resolve_agent_id_paginates() -> None:
         def admin_agents_list(self, *, include_deleted: bool, limit: int, offset: int):  # noqa: ANN001
             self.calls += 1
             if offset == 0:
-                return {"items": [{"id": 1, "name": "first"}], "total": 3}
-            return {"items": [{"id": 3, "name": "target"}], "total": 3}
+                return {"items": [{"id": 1, "name": "first"}], "total": 401}
+            return {"items": [{"id": 3, "name": "target"}], "total": 401}
 
     client = _FakeClient()
     agent_id = logs_cmd._resolve_agent_id(client, "target")

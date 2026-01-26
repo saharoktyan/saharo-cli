@@ -5,31 +5,34 @@ import types
 import pytest
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-fake_client_mod = types.ModuleType("saharo_client")
+try:
+    import saharo_client  # noqa: F401
+except ImportError:
+    fake_client_mod = types.ModuleType("saharo_client")
 
+    class _FakeApiError(Exception):
+        def __init__(self, status_code: int, message: str, details: str | None = None) -> None:
+            super().__init__(message)
+            self.status_code = status_code
+            self.details = details
 
-class _FakeApiError(Exception):
-    def __init__(self, status_code: int, message: str, details: str | None = None) -> None:
-        super().__init__(message)
-        self.status_code = status_code
-        self.details = details
+    fake_client_mod.ApiError = _FakeApiError
+    fake_client_mod.AuthError = type("AuthError", (Exception,), {})
+    fake_client_mod.NetworkError = type("NetworkError", (Exception,), {})
+    fake_client_mod.SaharoClient = object
+    sys.modules.setdefault("saharo_client", fake_client_mod)
 
+    fake_config_mod = types.ModuleType("saharo_client.config_types")
 
-fake_client_mod.ApiError = _FakeApiError
-fake_client_mod.SaharoClient = object
-sys.modules.setdefault("saharo_client", fake_client_mod)
+    class _FakeClientConfig:
+        def __init__(self, base_url: str = "", token: str | None = None) -> None:
+            self.base_url = base_url
+            self.token = token
+
+    fake_config_mod.ClientConfig = _FakeClientConfig
+    sys.modules.setdefault("saharo_client.config_types", fake_config_mod)
+
 sys.modules.setdefault("tomli_w", types.SimpleNamespace(dumps=lambda *_args, **_kwargs: ""))
-fake_config_mod = types.ModuleType("saharo_client.config_types")
-
-
-class _FakeClientConfig:
-    def __init__(self, base_url: str = "", token: str | None = None) -> None:
-        self.base_url = base_url
-        self.token = token
-
-
-fake_config_mod.ClientConfig = _FakeClientConfig
-sys.modules.setdefault("saharo_client.config_types", fake_config_mod)
 
 from saharo_cli.commands import invite_cmd
 from saharo_cli.config import AppConfig, AuthConfig

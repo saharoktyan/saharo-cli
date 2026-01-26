@@ -5,10 +5,3 @@ Summary: Saharo API client SDK (used by CLI and later by bot)
 Requires-Python: >=3.11
 Description-Content-Type: text/markdown
 Requires-Dist: httpx>=0.27.0
-
-# saharo-client
-
-Minimal SDK for Saharo API. Used by `saharo-cli` and later by Telegram bot.
-
-Currently implemented:
-- GET /health

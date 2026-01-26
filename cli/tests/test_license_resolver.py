@@ -4,7 +4,7 @@ from saharo_cli.license_resolver import resolve_entitlements
 
 
 def test_resolve_entitlements_parses_versions(monkeypatch) -> None:
-    def _fake_get(_url: str, _headers=None, _timeout=None) -> httpx.Response:
+    def _fake_get(_url: str, **_kwargs) -> httpx.Response:
         return httpx.Response(
             200,
             json={

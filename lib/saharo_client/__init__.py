@@ -1,4 +1,106 @@
 from .client import SaharoClient
+from .compat import evaluate_compatibility
+from .configs import (
+    build_awg_conf,
+    build_awg_uri,
+    extract_allowed_ips,
+    extract_dns,
+    parse_endpoint,
+    qt_qcompress,
+    resolve_access_target,
+    split_csv,
+)
 from .errors import ApiError, AuthError, NetworkError
+from .errors_utils import parse_api_error_detail
+from .jobs import job_status_hint, normalize_job_type, wait_job
+from .licensing import (
+    IMAGE_COMPONENTS,
+    LicenseEntitlements,
+    LicenseEntitlementsError,
+    resolve_entitlements,
+)
+from .polling import wait_for_server_heartbeat
+from .registry import (
+    extract_registry_creds_from_snapshot,
+    normalize_registry_host,
+    resolve_agent_version_from_license_payload,
+)
+from .resolve import (
+    ResolveError,
+    find_server_by_name,
+    resolve_agent_id_for_agents,
+    resolve_agent_id_for_logs,
+    resolve_protocol_for_grants,
+    resolve_server_id_for_grants,
+    resolve_server_id_for_jobs,
+    resolve_server_id_for_logs,
+    resolve_server_id_for_servers,
+    resolve_user_id_for_grants,
+    resolve_user_id_for_users,
+    validate_route_for_protocol,
+)
+from .semver import is_version_in_range, parse_semver
+from .updates import (
+    clean_versions,
+    coerce_int,
+    extract_installations,
+    extract_latest_versions,
+    extract_linked,
+    extract_outdated_agents,
+    extract_status,
+    format_api_error,
+    format_limit,
+    platform_id,
+)
 
-__all__ = ["SaharoClient", "ApiError", "AuthError", "NetworkError"]
+__all__ = [
+    "SaharoClient",
+    "ApiError",
+    "AuthError",
+    "NetworkError",
+    "evaluate_compatibility",
+    "build_awg_conf",
+    "build_awg_uri",
+    "extract_allowed_ips",
+    "extract_dns",
+    "parse_endpoint",
+    "qt_qcompress",
+    "resolve_access_target",
+    "split_csv",
+    "parse_api_error_detail",
+    "job_status_hint",
+    "normalize_job_type",
+    "wait_job",
+    "IMAGE_COMPONENTS",
+    "LicenseEntitlements",
+    "LicenseEntitlementsError",
+    "resolve_entitlements",
+    "wait_for_server_heartbeat",
+    "extract_registry_creds_from_snapshot",
+    "normalize_registry_host",
+    "resolve_agent_version_from_license_payload",
+    "ResolveError",
+    "find_server_by_name",
+    "resolve_agent_id_for_agents",
+    "resolve_agent_id_for_logs",
+    "resolve_protocol_for_grants",
+    "resolve_server_id_for_grants",
+    "resolve_server_id_for_jobs",
+    "resolve_server_id_for_logs",
+    "resolve_server_id_for_servers",
+    "resolve_user_id_for_grants",
+    "resolve_user_id_for_users",
+    "validate_route_for_protocol",
+    "is_version_in_range",
+    "parse_semver",
+    "clean_versions",
+    "coerce_int",
+    "extract_installations",
+    "extract_latest_versions",
+    "extract_linked",
+    "extract_outdated_agents",
+    "extract_status",
+    "format_api_error",
+    "format_limit",
+    "platform_id",
+]

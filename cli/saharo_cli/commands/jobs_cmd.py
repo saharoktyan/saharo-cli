@@ -5,6 +5,8 @@ import math
 import typer
 from rich.table import Table
 from saharo_client import ApiError
+from saharo_client.jobs import normalize_job_type
+from saharo_client.resolve import ResolveError, resolve_server_id_for_jobs
 
 from .. import console
 from ..config import load_config
@@ -22,23 +24,15 @@ app = typer.Typer(help="Jobs commands.\n\n" + JOBS_USAGE)
 
 
 def _resolve_server_id(client, server_ref: str) -> int:
-    if server_ref.isdigit():
-        return int(server_ref)
-    data = client.admin_servers_list(q=server_ref, limit=50, offset=0)
-    items = data.get("items") if isinstance(data, dict) else []
-    matches = [s for s in items if str(s.get("name")) == server_ref]
-    if not matches:
-        console.err(f"Server '{server_ref}' not found.")
+    try:
+        return resolve_server_id_for_jobs(client, server_ref)
+    except ResolveError as exc:
+        console.err(str(exc))
         raise typer.Exit(code=2)
-    if len(matches) > 1:
-        ids = ", ".join(str(s.get("id")) for s in matches)
-        console.err(f"Multiple servers matched '{server_ref}': {ids}")
-        raise typer.Exit(code=2)
-    return int(matches[0]["id"])
 
 
 def _normalize_job_type(value: str) -> str:
-    return value.strip().lower().replace("_", "-")
+    return normalize_job_type(value)
 
 
 @app.command("create")

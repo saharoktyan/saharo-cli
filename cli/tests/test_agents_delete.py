@@ -7,24 +7,34 @@ import typer
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-fake_client_mod = types.ModuleType("saharo_client")
+try:
+    import saharo_client  # noqa: F401
+except ImportError:
+    fake_client_mod = types.ModuleType("saharo_client")
 
+    class _FakeApiError(Exception):
+        def __init__(self, status_code: int, message: str, details: str | None = None) -> None:
+            super().__init__(message)
+            self.status_code = status_code
+            self.details = details
 
-class _FakeApiError(Exception):
-    def __init__(self, status_code: int, message: str, details: str | None = None) -> None:
-        super().__init__(message)
-        self.status_code = status_code
-        self.details = details
+    fake_client_mod.ApiError = _FakeApiError
+    fake_client_mod.AuthError = type("AuthError", (Exception,), {})
+    fake_client_mod.NetworkError = type("NetworkError", (Exception,), {})
+    fake_client_mod.SaharoClient = object
+    sys.modules["saharo_client"] = fake_client_mod
 
+    fake_config_mod = types.ModuleType("saharo_client.config_types")
+    fake_config_mod.ClientConfig = type("ClientConfig", (), {})
+    sys.modules["saharo_client.config_types"] = fake_config_mod
 
-fake_client_mod.ApiError = _FakeApiError
-fake_client_mod.NetworkError = type("NetworkError", (Exception,), {})
-fake_client_mod.SaharoClient = object
-sys.modules["saharo_client"] = fake_client_mod
+    fake_errors_mod = types.ModuleType("saharo_client.errors_utils")
+    fake_errors_mod.parse_api_error_detail = lambda *_args, **_kwargs: None
+    sys.modules["saharo_client.errors_utils"] = fake_errors_mod
 
-fake_config_mod = types.ModuleType("saharo_client.config_types")
-fake_config_mod.ClientConfig = type("ClientConfig", (), {})
-sys.modules["saharo_client.config_types"] = fake_config_mod
+    fake_resolve_mod = types.ModuleType("saharo_client.resolve")
+    fake_resolve_mod.resolve_agent_id_for_agents = lambda *_args, **_kwargs: 0
+    sys.modules["saharo_client.resolve"] = fake_resolve_mod
 sys.modules.setdefault("tomli_w", types.SimpleNamespace(dumps=lambda *_args, **_kwargs: ""))
 
 from saharo_cli.commands import agents_cmd

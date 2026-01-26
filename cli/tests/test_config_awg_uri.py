@@ -6,13 +6,18 @@ import types
 import zlib
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-fake_client_mod = types.ModuleType("saharo_client")
-fake_client_mod.ApiError = type("ApiError", (), {})
-fake_client_mod.SaharoClient = object
-sys.modules["saharo_client"] = fake_client_mod
-fake_config_mod = types.ModuleType("saharo_client.config_types")
-fake_config_mod.ClientConfig = type("ClientConfig", (), {})
-sys.modules["saharo_client.config_types"] = fake_config_mod
+try:
+    import saharo_client  # noqa: F401
+except ImportError:
+    fake_client_mod = types.ModuleType("saharo_client")
+    fake_client_mod.ApiError = type("ApiError", (), {})
+    fake_client_mod.AuthError = type("AuthError", (Exception,), {})
+    fake_client_mod.NetworkError = type("NetworkError", (Exception,), {})
+    fake_client_mod.SaharoClient = object
+    sys.modules["saharo_client"] = fake_client_mod
+    fake_config_mod = types.ModuleType("saharo_client.config_types")
+    fake_config_mod.ClientConfig = type("ClientConfig", (), {})
+    sys.modules["saharo_client.config_types"] = fake_config_mod
 sys.modules.setdefault("tomli_w", types.SimpleNamespace(dumps=lambda *_args, **_kwargs: ""))
 
 from saharo_cli.commands import config_cmd

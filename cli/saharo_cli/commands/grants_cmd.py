@@ -3,6 +3,13 @@ from __future__ import annotations
 import typer
 from rich.table import Table
 from saharo_client import ApiError
+from saharo_client.resolve import (
+    ResolveError,
+    resolve_protocol_for_grants,
+    resolve_server_id_for_grants,
+    resolve_user_id_for_grants,
+    validate_route_for_protocol,
+)
 
 from .. import console
 from ..config import load_config
@@ -21,108 +28,43 @@ def _print_candidates(title: str, columns: list[str], rows: list[list[str]]) -> 
 
 
 def _resolve_protocol(client, protocol: str) -> tuple[int, str | None]:
-    protocol = (protocol or "").strip()
-    if not protocol:
-        console.err("Protocol is required.")
+    try:
+        return resolve_protocol_for_grants(client, protocol)
+    except ResolveError as exc:
+        console.err(str(exc))
+        if exc.info_label and exc.info_value:
+            console.info(f"{exc.info_label}: {exc.info_value}")
+        if exc.candidates and exc.candidate_headers:
+            _print_candidates("Protocols", exc.candidate_headers, exc.candidates)
         raise typer.Exit(code=2)
-    data = client.admin_protocols_list()
-    items = data.get("items") if isinstance(data, dict) else []
-    if protocol.isdigit():
-        protocol_id = int(protocol)
-        match = next((p for p in items or [] if int(p.get("id", -1)) == protocol_id), None)
-        return protocol_id, match.get("code") if match else None
-    matches = [
-        p
-        for p in items or []
-        if str(p.get("code", "")).lower() == protocol.lower()
-    ]
-    if not matches:
-        choices = ", ".join(sorted({str(p.get("code")) for p in items or [] if p.get("code")}))
-        console.err(f"Protocol '{protocol}' not found.")
-        if choices:
-            console.info(f"Available: {choices}")
-        raise typer.Exit(code=2)
-    if len(matches) > 1:
-        console.err(f"Protocol '{protocol}' is ambiguous. Matches:")
-        rows = [
-            [str(p.get("id", "-")), str(p.get("code", "-")), str(p.get("title", "-"))]
-            for p in matches
-        ]
-        _print_candidates("Protocols", ["id", "code", "title"], rows)
-        raise typer.Exit(code=2)
-    return int(matches[0]["id"]), matches[0].get("code")
 
 
 def _resolve_user_id(client, user: str | None, user_id: int | None) -> int:
-    if user_id is not None:
-        return int(user_id)
-    value = (user or "").strip()
-    if not value:
-        console.err("User is required. Provide --user or --user-id.")
+    try:
+        return resolve_user_id_for_grants(client, user, user_id)
+    except ResolveError as exc:
+        console.err(str(exc))
+        if exc.candidates and exc.candidate_headers:
+            _print_candidates("Users", exc.candidate_headers, exc.candidates)
         raise typer.Exit(code=2)
-    if value.isdigit():
-        return int(value)
-
-    data = client.admin_users_list(q=value, limit=50, offset=0)
-    items = data.get("items") if isinstance(data, dict) else []
-    if not items:
-        console.err(f"User '{value}' not found.")
-        raise typer.Exit(code=2)
-    if len(items) > 1:
-        console.err("Multiple users matched. Use --user-id to disambiguate.")
-        rows = [
-            [
-                str(u.get("id", "-")),
-                str(u.get("username") or "-"),
-                str(u.get("telegram_id") or "-"),
-            ]
-            for u in items
-        ]
-        _print_candidates("Users", ["id", "username", "telegram_id"], rows)
-        raise typer.Exit(code=2)
-    return int(items[0]["id"])
 
 
 def _resolve_server_id(client, server: str | None, server_id: int | None) -> int:
-    if server_id is not None:
-        return int(server_id)
-    value = (server or "").strip()
-    if not value:
-        console.err("Server is required. Provide --server or --server-id.")
+    try:
+        return resolve_server_id_for_grants(client, server, server_id)
+    except ResolveError as exc:
+        console.err(str(exc))
+        if exc.candidates and exc.candidate_headers:
+            _print_candidates("Servers", exc.candidate_headers, exc.candidates)
         raise typer.Exit(code=2)
-    if value.isdigit():
-        return int(value)
-
-    data = client.admin_servers_list(q=value, limit=50, offset=0)
-    items = data.get("items") if isinstance(data, dict) else []
-    if not items:
-        console.err(f"Server '{value}' not found.")
-        raise typer.Exit(code=2)
-    if len(items) > 1:
-        console.err("Multiple servers matched. Use --server-id to disambiguate.")
-        rows = [
-            [
-                str(s.get("id", "-")),
-                str(s.get("name") or "-"),
-                str(s.get("public_host") or "-"),
-            ]
-            for s in items
-        ]
-        _print_candidates("Servers", ["id", "name", "host"], rows)
-        raise typer.Exit(code=2)
-    return int(items[0]["id"])
 
 
 def _validate_route_for_protocol(protocol_code: str | None, route: str | None) -> str | None:
-    if route is None:
-        return None
-    normalized = route.strip()
-    if not normalized:
-        return None
-    if protocol_code != "xray":
-        console.err("Route is only supported for xray grants.")
+    try:
+        return validate_route_for_protocol(protocol_code, route)
+    except ResolveError as exc:
+        console.err(str(exc))
         raise typer.Exit(code=2)
-    return normalized
 
 
 @app.command("list")

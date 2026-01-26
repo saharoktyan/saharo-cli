@@ -8,41 +8,47 @@ from types import SimpleNamespace
 import pytest
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-fake_client_mod = types.ModuleType("saharo_client")
+try:
+    import saharo_client  # noqa: F401
+except ImportError:
+    fake_client_mod = types.ModuleType("saharo_client")
 
+    class _FakeSaharoClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
 
-class _FakeSaharoClient:
-    def __init__(self, *_args, **_kwargs) -> None:
+    class _FakeApiError(Exception):
+        def __init__(self, status_code: int, message: str, details: str | None = None) -> None:
+            super().__init__(message)
+            self.status_code = status_code
+            self.details = details
+
+    class _FakeNetworkError(Exception):
         pass
 
+    fake_client_mod.SaharoClient = _FakeSaharoClient
+    fake_client_mod.ApiError = _FakeApiError
+    fake_client_mod.AuthError = type("AuthError", (Exception,), {})
+    fake_client_mod.NetworkError = _FakeNetworkError
+    sys.modules.setdefault("saharo_client", fake_client_mod)
 
-class _FakeApiError(Exception):
-    def __init__(self, status_code: int, message: str, details: str | None = None) -> None:
-        super().__init__(message)
-        self.status_code = status_code
-        self.details = details
+    fake_config_mod = types.ModuleType("saharo_client.config_types")
 
+    class _FakeClientConfig:
+        def __init__(self, base_url: str = "", token: str | None = None) -> None:
+            self.base_url = base_url
+            self.token = token
 
-class _FakeNetworkError(Exception):
-    pass
+    fake_config_mod.ClientConfig = _FakeClientConfig
+    sys.modules.setdefault("saharo_client.config_types", fake_config_mod)
 
+    fake_errors_mod = types.ModuleType("saharo_client.errors_utils")
+    fake_errors_mod.parse_api_error_detail = lambda *_args, **_kwargs: None
+    sys.modules.setdefault("saharo_client.errors_utils", fake_errors_mod)
 
-fake_client_mod.SaharoClient = _FakeSaharoClient
-fake_client_mod.ApiError = _FakeApiError
-fake_client_mod.NetworkError = _FakeNetworkError
-sys.modules.setdefault("saharo_client", fake_client_mod)
-
-fake_config_mod = types.ModuleType("saharo_client.config_types")
-
-
-class _FakeClientConfig:
-    def __init__(self, base_url: str = "", token: str | None = None) -> None:
-        self.base_url = base_url
-        self.token = token
-
-
-fake_config_mod.ClientConfig = _FakeClientConfig
-sys.modules.setdefault("saharo_client.config_types", fake_config_mod)
+    fake_resolve_mod = types.ModuleType("saharo_client.resolve")
+    fake_resolve_mod.resolve_agent_id_for_agents = lambda *_args, **_kwargs: 0
+    sys.modules.setdefault("saharo_client.resolve", fake_resolve_mod)
 sys.modules.setdefault("tomli_w", types.SimpleNamespace(dumps=lambda *_args, **_kwargs: ""))
 
 from saharo_cli.commands import agents_cmd
