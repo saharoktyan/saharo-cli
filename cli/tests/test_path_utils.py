@@ -21,6 +21,7 @@ def test_bootstrap_inputs_posix_paths() -> None:
         jwt_secret="jwt-secret",
         install_dir="/opt/saharo",
         registry="registry.example.com",
+        lic_url="https://lic.example.com",
         tag="1.2.3",
         non_interactive=True,
         assume_yes=True,

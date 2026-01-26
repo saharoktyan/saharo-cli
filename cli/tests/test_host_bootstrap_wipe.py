@@ -21,6 +21,7 @@ def _make_inputs(tmp_path) -> BootstrapInputs:
         jwt_secret="jwt-secret",
         install_dir=str(tmp_path),
         registry="registry.example.com",
+        lic_url="https://lic.example.com",
         tag="1.2.3",
         non_interactive=True,
         assume_yes=True,

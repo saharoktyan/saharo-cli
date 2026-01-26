@@ -168,6 +168,7 @@ class BootstrapInputs:
     jwt_secret: str
     install_dir: str
     registry: str
+    lic_url: str
     tag: str
     non_interactive: bool
     assume_yes: bool
@@ -878,6 +879,7 @@ def collect_inputs(
         telegram_bot_token=telegram_bot_token,
         install_dir=install_dir,
         registry=registry,
+        lic_url=lic_url,
         tag=tag,
         non_interactive=non_interactive,
         assume_yes=assume_yes,
@@ -2205,6 +2207,8 @@ def render_env(inputs: BootstrapInputs, *, include_root_secret: bool) -> str:
         "CORS_ALLOW_ORIGINS=" + inputs.api_url,
         "CORS_ALLOW_CREDENTIALS=true",
         f"JWT_SECRET={inputs.jwt_secret}",
+        f"LICENSE_API_URL={inputs.lic_url}",
+        "TELEMETRY_REPORT_INTERVAL_HOURS=1",
     ]
     if inputs.telegram_bot_token:
         lines.append(f"TELEGRAM_BOT_TOKEN={inputs.telegram_bot_token}")
