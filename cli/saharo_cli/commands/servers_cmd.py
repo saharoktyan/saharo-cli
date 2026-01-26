@@ -52,6 +52,17 @@ DEFAULT_AGENT_HEARTBEAT_INTERVAL_S = 30
 DEFAULT_AGENT_POLL_INTERVAL_S = 10
 
 
+def _validate_ssh_key_path(raw_path: str) -> str:
+    path = os.path.expanduser(raw_path.strip())
+    if not path:
+        raise RuntimeError("SSH key path is empty.")
+    if path.endswith(".pub"):
+        raise RuntimeError("SSH key must be a private key, not a .pub file.")
+    if not os.path.exists(path):
+        raise RuntimeError(f"SSH key not found: {path}")
+    return path
+
+
 def _resolve_agent_version_from_host_api(cfg, base_url_override: str | None) -> tuple[str, str | None]:
     client = make_client(cfg, profile=None, base_url_override=base_url_override)
     try:
@@ -1200,14 +1211,18 @@ def bootstrap(
         raise typer.Exit(code=2)
     if not local:
         if not key and not password:
-            key_input = typer.prompt(
-                "SSH private key path (leave blank to use password)",
-                default="",
-                show_default=False,
-            )
-            key = key_input.strip() or None
-            if not key:
-                password = True
+            if Confirm.ask("Use an SSH private key for authentication?", default=True):
+                key_input = typer.prompt(
+                    "SSH private key path",
+                    default="~/.ssh/id_ed_25519",
+                )
+                try:
+                    key = _validate_ssh_key_path(key_input)
+                except RuntimeError as exc:
+                    console.err(str(exc))
+                    raise typer.Exit(code=2)
+            else:
+                ssh_password_value = typer.prompt("SSH password (input hidden)", hide_input=True)
         if password and not dry_run:
             ssh_password_value = typer.prompt("SSH password (input hidden)", hide_input=True)
             password = False

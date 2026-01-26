@@ -81,6 +81,17 @@ def _generate_secret_token() -> str:
     return secrets.token_urlsafe(32)
 
 
+def _validate_ssh_key_path(raw_path: str) -> str:
+    path = os.path.expanduser(raw_path.strip())
+    if not path:
+        raise RuntimeError("SSH key path is empty.")
+    if path.endswith(".pub"):
+        raise RuntimeError("SSH key must be a private key, not a .pub file.")
+    if not os.path.exists(path):
+        raise RuntimeError(f"SSH key not found: {path}")
+    return path
+
+
 def _format_auth_header(headers: dict[str, str] | None) -> str:
     if not headers:
         return "(none)"
@@ -404,6 +415,7 @@ def host_bootstrap(
         console.err("Local host bootstrap is not supported on Windows. Use --ssh-host to connect to a Linux host.")
         raise typer.Exit(code=2)
 
+    ssh_password_override = None
     if not ssh_host and not non_interactive:
         if is_windows():
             console.info("Local host bootstrap is not supported on Windows.")
@@ -417,12 +429,18 @@ def host_bootstrap(
         if ssh_host:
             ssh_port = typer.prompt("SSH port", default=ssh_port)
             if not ssh_key:
-                key_input = typer.prompt(
-                    "SSH private key path (leave blank to use password)",
-                    default="",
-                    show_default=False,
-                )
-                ssh_key = key_input.strip() or None
+                if Confirm.ask("Use an SSH private key for authentication?", default=True):
+                    key_input = typer.prompt(
+                        "SSH private key path",
+                        default="~/.ssh/id_ed_25519",
+                    )
+                    try:
+                        ssh_key = _validate_ssh_key_path(key_input)
+                    except RuntimeError as exc:
+                        console.err(str(exc))
+                        raise typer.Exit(code=2)
+                else:
+                    ssh_password_override = typer.prompt("SSH password (input hidden)", hide_input=True)
             ssh_user = ssh_host.split("@", 1)[0] if "@" in ssh_host else ""
             if ssh_user and ssh_user != "root" and not ssh_sudo:
                 if not Confirm.ask(
@@ -471,6 +489,7 @@ def host_bootstrap(
             ssh_port=ssh_port,
             ssh_key=ssh_key,
             ssh_sudo=ssh_sudo,
+            ssh_password_override=ssh_password_override,
             api_url=api_url,
             x_root_secret=x_root_secret,
             db_password=db_password,
@@ -531,6 +550,7 @@ def host_bootstrap(
         telegram_bot_token=telegram_bot_token,
         install_dir=install_dir,
         registry=registry,
+        lic_url=lic_url,
         tag=resolved_tag,
         non_interactive=non_interactive,
         assume_yes=assume_yes,
@@ -586,6 +606,7 @@ def _host_bootstrap_ssh(
         ssh_port: int,
         ssh_key: str | None,
         ssh_sudo: bool,
+        ssh_password_override: str | None,
         api_url: str | None,
         x_root_secret: str | None,
         db_password: str | None,
@@ -611,8 +632,8 @@ def _host_bootstrap_ssh(
 ) -> None:
     install_dir = _normalize_remote_install_dir(install_dir)
 
-    ssh_password = None
-    if not ssh_key:
+    ssh_password = ssh_password_override
+    if not ssh_key and ssh_password is None:
         if is_windows():
             console.err(
                 "Password SSH authentication is not supported on Windows. "
@@ -702,6 +723,7 @@ def _host_bootstrap_ssh(
             telegram_bot_token=telegram_bot_token,
             install_dir=install_dir,
             registry=registry,
+            lic_url=lic_url,
             tag=resolved_tag,
             non_interactive=non_interactive,
             assume_yes=assume_yes,
@@ -809,6 +831,7 @@ def collect_inputs(
         telegram_bot_token: str | None,
         install_dir: str,
         registry: str,
+        lic_url: str,
         tag: str,
         non_interactive: bool,
         assume_yes: bool,
