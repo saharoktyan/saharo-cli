@@ -5,6 +5,7 @@ import logging
 import os
 import posixpath
 import re
+import secrets
 import shlex
 import shutil
 import socket
@@ -74,6 +75,10 @@ def _redact_secret(value: str) -> str:
             return "*" * len(value)
         return f"{value[0]}{'*' * (len(value) - 2)}{value[-1]}"
     return f"{value[:4]}...{value[-4:]}"
+
+
+def _generate_secret_token() -> str:
+    return secrets.token_urlsafe(32)
 
 
 def _format_auth_header(headers: dict[str, str] | None) -> str:
@@ -832,20 +837,21 @@ def collect_inputs(
     if not api_url:
         api_url = typer.prompt("Public API URL (e.g. https://api.example.com)")
     if not x_root_secret:
-        x_root_secret = typer.prompt("Root secret for admin bootstrap (input hidden)", hide_input=True)
+        if Confirm.ask("Generate a strong root secret automatically?", default=True):
+            x_root_secret = _generate_secret_token()
+            console.info(f"Generated root secret: {_redact_secret(x_root_secret)}")
+        else:
+            x_root_secret = typer.prompt("Root secret for admin bootstrap (input hidden)", hide_input=True)
     if not db_password:
-        db_password = typer.prompt("Postgres password (input hidden)", hide_input=True)
+        if Confirm.ask("Generate a strong Postgres password automatically?", default=True):
+            db_password = _generate_secret_token()
+            console.info(f"Generated Postgres password: {_redact_secret(db_password)}")
+        else:
+            db_password = typer.prompt("Postgres password (input hidden)", hide_input=True)
     if not admin_username:
         admin_username = typer.prompt("Admin username")
     if not admin_password:
         admin_password = typer.prompt("Admin password (input hidden)", hide_input=True, confirmation_prompt=True)
-    if telegram_bot_token is None and not non_interactive:
-        telegram_bot_token = typer.prompt(
-            "Telegram bot token (optional, press Enter to skip)",
-            default="",
-            show_default=False,
-        )
-
     api_url = (api_url or "").strip()
     if not api_url:
         console.err("API URL cannot be empty.")
