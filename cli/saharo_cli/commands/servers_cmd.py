@@ -1162,59 +1162,45 @@ def bootstrap(
         console.err("--server is only valid with protocol bootstrap.")
         raise typer.Exit(code=2)
 
+    if key:
+        try:
+            key = _validate_ssh_key_path(key)
+        except RuntimeError as exc:
+            console.err(str(exc))
+            raise typer.Exit(code=2)
+
     use_wizard = not name or not host or (not local and not ssh_target)
     if use_wizard:
         console.rule("[bold]Saharo Server Bootstrap[/]")
-    if not name:
-        name = typer.prompt("Server name")
-    if not host:
-        host = typer.prompt("Server host (IP or DNS)")
-    if heartbeat_interval_s <= 0:
-        console.err("--heartbeat-interval must be a positive integer.")
-        raise typer.Exit(code=2)
-    if poll_interval_s <= 0:
-        console.err("--poll-interval must be a positive integer.")
-        raise typer.Exit(code=2)
-    if use_wizard:
-        heartbeat_interval_s = typer.prompt(
-            "Agent heartbeat interval (seconds)",
-            default=DEFAULT_AGENT_HEARTBEAT_INTERVAL_S,
-        )
-        poll_interval_s = typer.prompt(
-            "Agent job poll interval (seconds)",
-            default=DEFAULT_AGENT_POLL_INTERVAL_S,
-        )
-        if heartbeat_interval_s <= 0:
-            console.err("Heartbeat interval must be a positive integer.")
-            raise typer.Exit(code=2)
-        if poll_interval_s <= 0:
-            console.err("Poll interval must be a positive integer.")
-            raise typer.Exit(code=2)
     if local and ssh_target:
         console.err("--local cannot be combined with --ssh.")
         raise typer.Exit(code=2)
     if not local and not ssh_target:
         if is_windows():
-            console.err("Local server bootstrap is not supported on Windows. Use SSH to connect to a Linux host.")
-            raise typer.Exit(code=2)
-        if not Confirm.ask("Install agent locally on this machine?", default=False):
+            console.info("Local server bootstrap is not supported on Windows.")
+            ssh_host = typer.prompt("SSH host (e.g. 203.0.113.10)")
+            ssh_user = typer.prompt("SSH user", default="root")
+            ssh_target = f"{ssh_user}@{ssh_host}" if ssh_user else ssh_host
+        elif Confirm.ask("Install on a remote host via SSH?", default=False):
             ssh_host = typer.prompt("SSH host (e.g. 203.0.113.10)")
             ssh_user = typer.prompt("SSH user", default="root")
             ssh_target = f"{ssh_user}@{ssh_host}" if ssh_user else ssh_host
         else:
             local = True
     if local and is_windows():
-        console.err("Local server bootstrap is not supported on Windows. Use --ssh to connect to a Linux host.")
+        console.err("Local server bootstrap is not supported on Windows. Use SSH to connect to a Linux host.")
         raise typer.Exit(code=2)
     if not local and not ssh_target:
         console.err("--ssh is required unless --local is set.")
         raise typer.Exit(code=2)
+    if not local and use_wizard:
+        port = typer.prompt("SSH port", default=port)
     if not local:
         if not key and not password:
             if Confirm.ask("Use an SSH private key for authentication?", default=True):
                 key_input = typer.prompt(
                     "SSH private key path",
-                    default="~/.ssh/id_ed25519",
+                    default="~/.ssh/id_ed_25519",
                 )
                 try:
                     key = _validate_ssh_key_path(key_input)
@@ -1246,6 +1232,31 @@ def bootstrap(
                 sudo_password = False
             else:
                 sudo_password_value = None
+    if not name:
+        name = typer.prompt("Server name")
+    if not host:
+        host = typer.prompt("Server host (IP or DNS)")
+    if heartbeat_interval_s <= 0:
+        console.err("--heartbeat-interval must be a positive integer.")
+        raise typer.Exit(code=2)
+    if poll_interval_s <= 0:
+        console.err("--poll-interval must be a positive integer.")
+        raise typer.Exit(code=2)
+    if use_wizard:
+        heartbeat_interval_s = typer.prompt(
+            "Agent heartbeat interval (seconds)",
+            default=DEFAULT_AGENT_HEARTBEAT_INTERVAL_S,
+        )
+        poll_interval_s = typer.prompt(
+            "Agent job poll interval (seconds)",
+            default=DEFAULT_AGENT_POLL_INTERVAL_S,
+        )
+        if heartbeat_interval_s <= 0:
+            console.err("Heartbeat interval must be a positive integer.")
+            raise typer.Exit(code=2)
+        if poll_interval_s <= 0:
+            console.err("Poll interval must be a positive integer.")
+            raise typer.Exit(code=2)
     if register_timeout <= 0:
         console.err("--register-timeout must be a positive integer.")
         raise typer.Exit(code=2)

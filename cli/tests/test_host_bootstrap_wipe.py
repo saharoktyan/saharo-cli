@@ -13,6 +13,7 @@ def _make_inputs(tmp_path) -> BootstrapInputs:
     return BootstrapInputs(
         api_url="https://example.test",
         api_url_original="https://example.test",
+        host_name="Host API",
         x_root_secret="root-secret",
         db_password="db-pass",
         admin_username="admin",

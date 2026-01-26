@@ -176,6 +176,7 @@ def _license_api_request(
 class BootstrapInputs:
     api_url: str
     api_url_original: str | None
+    host_name: str
     x_root_secret: str
     db_password: str
     admin_username: str
@@ -348,6 +349,7 @@ def _normalize_remote_install_dir(install_dir: str) -> str:
 
 def host_bootstrap(
         api_url: str | None = typer.Option(None, "--api-url", help="Public base URL for users/clients."),
+        host_name: str | None = typer.Option(None, "--host-name", help="Host display name for the user portal."),
         x_root_secret: str | None = typer.Option(None, "--x-root-secret", help="Root secret for /admin/bootstrap."),
         db_password: str | None = typer.Option(None, "--db-password", help="Postgres password."),
         admin_username: str | None = typer.Option(None, "--admin-username", help="Admin username."),
@@ -403,9 +405,12 @@ def host_bootstrap(
     """
     console.rule("[bold]Saharo Host Bootstrap[/]")
 
-    if ssh_key and ssh_key.endswith(".pub"):
-        console.err("--ssh-key must be a private key path, not .pub")
-        raise typer.Exit(code=2)
+    if ssh_key:
+        try:
+            ssh_key = _validate_ssh_key_path(ssh_key)
+        except RuntimeError as exc:
+            console.err(str(exc))
+            raise typer.Exit(code=2)
 
     if print_versions and no_license:
         console.err("--print-versions requires license entitlements; remove --no-license.")
@@ -491,6 +496,7 @@ def host_bootstrap(
             ssh_sudo=ssh_sudo,
             ssh_password_override=ssh_password_override,
             api_url=api_url,
+            host_name=host_name,
             x_root_secret=x_root_secret,
             db_password=db_password,
             admin_username=admin_username,
@@ -542,6 +548,7 @@ def host_bootstrap(
 
     inputs = collect_inputs(
         api_url=api_url,
+        host_name=host_name,
         x_root_secret=x_root_secret,
         db_password=db_password,
         admin_username=admin_username,
@@ -608,6 +615,7 @@ def _host_bootstrap_ssh(
         ssh_sudo: bool,
         ssh_password_override: str | None,
         api_url: str | None,
+        host_name: str | None,
         x_root_secret: str | None,
         db_password: str | None,
         admin_username: str | None,
@@ -715,6 +723,7 @@ def _host_bootstrap_ssh(
         existing_jwt_secret = _get_existing_jwt_secret_remote(session, install_dir, sudo=use_sudo)
         inputs = collect_inputs(
             api_url=api_url,
+            host_name=host_name,
             x_root_secret=x_root_secret,
             db_password=db_password,
             admin_username=admin_username,
@@ -823,6 +832,7 @@ def check_prereqs(inputs: BootstrapInputs) -> PrereqResult:
 def collect_inputs(
         *,
         api_url: str | None,
+        host_name: str | None,
         x_root_secret: str | None,
         db_password: str | None,
         admin_username: str | None,
@@ -857,6 +867,11 @@ def collect_inputs(
         console.err(f"Missing required flags: {', '.join(missing)}")
         raise typer.Exit(code=2)
 
+    if not host_name:
+        if non_interactive:
+            host_name = "Host API"
+        else:
+            host_name = typer.prompt("Host API name", default="Host API")
     if not api_url:
         api_url = typer.prompt("Public API URL (e.g. https://api.example.com)")
     if not x_root_secret:
@@ -928,6 +943,7 @@ def collect_inputs(
     return BootstrapInputs(
         api_url=api_url,
         api_url_original=api_url_original,
+        host_name=host_name or "Host API",
         x_root_secret=x_root_secret or "",
         db_password=db_password or "",
         admin_username=admin_username or "",
@@ -2254,6 +2270,7 @@ def render_env(inputs: BootstrapInputs, *, include_root_secret: bool) -> str:
     database_url = f"postgresql://{_url_encode('saharo')}:{_url_encode(inputs.db_password)}@db:5432/saharo"
     lines = [
         f"APP_VERSION={inputs.tag}",
+        f"HOST_NAME={inputs.host_name}",
         "ENV=prod",
         "LOG_LEVEL=info",
         "POSTGRES_DB=saharo",
