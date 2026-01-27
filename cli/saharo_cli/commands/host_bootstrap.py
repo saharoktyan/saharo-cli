@@ -271,8 +271,11 @@ def fetch_registry_creds_from_license(
         license_key: str,
         machine_name: str,
         resolved_versions: dict[str, str] | None = None,
+        force_password: bool = True,
 ) -> _RegistryActivation:
     url = lic_url.rstrip("/") + "/v1/activate"
+    if force_password:
+        url = url + "?force_password=1"
     payload = {"machine_name": machine_name, "note": "host bootstrap"}
     response = _license_api_request(
         "POST",
@@ -368,6 +371,11 @@ def host_bootstrap(
         no_license: bool = typer.Option(False, "--no-license",
                                         help="Do not query license API; use --tag or --version."),
         license_key: str | None = typer.Option(None, "--license-key", help="License key for version resolution."),
+        force_registry_password: bool = typer.Option(
+            True,
+            "--force-registry-password/--no-force-registry-password",
+            help="Force registry password rotation on license activation.",
+        ),
         tag: str = typer.Option(DEFAULT_TAG, "--tag", help="Image tag to deploy (fallback)."),
         wipe_data: bool = typer.Option(False, "--wipe-data", help="DANGEROUS: delete all host data before install."),
         confirm_wipe: bool = typer.Option(
@@ -514,6 +522,7 @@ def host_bootstrap(
             lic_url=lic_url,
             no_license=no_license,
             license_key=license_key,
+            force_registry_password=force_registry_password,
             version=version,
             entitlements=entitlements,
             wipe_data=wipe_data,
@@ -530,6 +539,7 @@ def host_bootstrap(
             license_key=license_key or "",
             machine_name=socket.gethostname(),
             resolved_versions=entitlements.resolved_versions if entitlements else None,
+            force_password=force_registry_password,
         )
         if activation.registry_password is None:
             console.err(
@@ -633,6 +643,7 @@ def _host_bootstrap_ssh(
         lic_url: str,
         no_license: bool,
         license_key: str | None,
+        force_registry_password: bool,
         version: str | None,
         entitlements: LicenseEntitlements | None,
         wipe_data: bool,
@@ -704,6 +715,7 @@ def _host_bootstrap_ssh(
                 license_key=license_key,
                 machine_name=machine_name,
                 resolved_versions=entitlements.resolved_versions if entitlements else None,
+                force_password=force_registry_password,
             )
             if activation.registry_password is None:
                 console.err(
