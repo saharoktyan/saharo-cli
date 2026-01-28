@@ -9,6 +9,7 @@ saharo_cli/console.py
 saharo_cli/errors.py
 saharo_cli/formatting.py
 saharo_cli/http.py
+saharo_cli/interactive.py
 saharo_cli/keys.py
 saharo_cli/license_resolver.py
 saharo_cli/logging_.py

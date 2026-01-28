@@ -20,7 +20,6 @@ from typing import Callable, Iterable, Iterator
 
 import httpx
 import typer
-from rich.prompt import Confirm
 from rich.text import Text
 
 from .host_https import (
@@ -36,6 +35,14 @@ from ..license_resolver import (
     LicenseEntitlements,
     LicenseEntitlementsError,
     resolve_entitlements,
+)
+from ..config import load_config
+from ..interactive import (
+    confirm_choice,
+    confirm_telemetry,
+    fetch_portal_licenses,
+    persist_telemetry_choice,
+    select_license,
 )
 from ..path_utils import looks_like_windows_path
 from ..ssh import SSHSession, SshTarget, build_control_path, is_windows
@@ -435,14 +442,14 @@ def host_bootstrap(
             ssh_host_input = typer.prompt("SSH host (e.g. 203.0.113.10)")
             ssh_user = typer.prompt("SSH user", default="root")
             ssh_host = f"{ssh_user}@{ssh_host_input}" if ssh_user else ssh_host_input
-        elif Confirm.ask("Install on a remote host via SSH?", default=False):
+        elif confirm_choice("Install on a remote host via SSH?", default=False):
             ssh_host_input = typer.prompt("SSH host (e.g. 203.0.113.10)")
             ssh_user = typer.prompt("SSH user", default="root")
             ssh_host = f"{ssh_user}@{ssh_host_input}" if ssh_user else ssh_host_input
         if ssh_host:
             ssh_port = typer.prompt("SSH port", default=ssh_port)
             if not ssh_key:
-                if Confirm.ask("Use an SSH private key for authentication?", default=True):
+                if confirm_choice("Use an SSH private key for authentication?", default=True):
                     key_input = typer.prompt(
                         "SSH private key path",
                         default="~/.ssh/id_ed25519",
@@ -456,7 +463,7 @@ def host_bootstrap(
                     ssh_password_override = typer.prompt("SSH password (input hidden)", hide_input=True)
             ssh_user = ssh_host.split("@", 1)[0] if "@" in ssh_host else ""
             if ssh_user and ssh_user != "root" and not ssh_sudo:
-                if not Confirm.ask(
+                if not confirm_choice(
                     "Remote user is not root. Use sudo privileges (required)?",
                     default=True,
                 ):
@@ -480,7 +487,13 @@ def host_bootstrap(
         if non_interactive:
             console.err("Missing required flag: --license-key (or pass --no-license).")
             raise typer.Exit(code=2)
-        license_key = typer.prompt("License key (input hidden)", hide_input=True)
+        cfg = load_config()
+        portal_licenses = fetch_portal_licenses(cfg, base_url_override=None)
+        selected_key = select_license(portal_licenses)
+        if selected_key:
+            license_key = selected_key
+        if not license_key:
+            license_key = typer.prompt("License key (input hidden)", hide_input=True)
         if not (license_key or "").strip():
             console.err("ERR License key is required (or pass --no-license / --tag / --version).")
             raise typer.Exit(code=2)
@@ -577,6 +590,11 @@ def host_bootstrap(
         skip_https=skip_https,
     )
 
+    if not non_interactive:
+        host_key = (inputs.host_name or "").strip() or (ssh_host or inputs.api_url)
+        telemetry_enabled = confirm_telemetry(default=False)
+        persist_telemetry_choice(host_key, telemetry_enabled)
+
     prereqs = check_prereqs(inputs)
     if not prereqs.docker_installed:
         handle_missing_docker(inputs)
@@ -590,7 +608,7 @@ def host_bootstrap(
 
     if not inputs.assume_yes:
         confirm_message = Text("Proceed with writing files and starting containers?", style="bold")
-        if not Confirm.ask(confirm_message, default=True):
+        if not confirm_choice(confirm_message, default=True):
             console.err("Aborted by user.")
             raise typer.Exit(code=1)
 
@@ -775,7 +793,7 @@ def _host_bootstrap_ssh(
 
         if not inputs.assume_yes:
             confirm_message = Text("Proceed with writing files and starting containers?", style="bold")
-            if not Confirm.ask(confirm_message, default=True):
+            if not confirm_choice(confirm_message, default=True):
                 console.err("Aborted by user.")
                 raise typer.Exit(code=1)
 
@@ -887,13 +905,13 @@ def collect_inputs(
     if not api_url:
         api_url = typer.prompt("Public API URL (e.g. https://api.example.com)")
     if not x_root_secret:
-        if Confirm.ask("Generate a strong root secret automatically?", default=True):
+        if confirm_choice("Generate a strong root secret automatically?", default=True):
             x_root_secret = _generate_secret_token()
             console.info(f"Generated root secret: {_redact_secret(x_root_secret)}")
         else:
             x_root_secret = typer.prompt("Root secret for admin bootstrap (input hidden)", hide_input=True)
     if not db_password:
-        if Confirm.ask("Generate a strong Postgres password automatically?", default=True):
+        if confirm_choice("Generate a strong Postgres password automatically?", default=True):
             db_password = _generate_secret_token()
             console.info(f"Generated Postgres password: {_redact_secret(db_password)}")
         else:
@@ -920,7 +938,7 @@ def collect_inputs(
     if skip_https:
         https_enabled = False
     elif not non_interactive:
-        if Confirm.ask("Configure HTTPS with Nginx + Let's Encrypt?", default=True):
+        if confirm_choice("Configure HTTPS with Nginx + Let's Encrypt?", default=True):
             https_enabled = True
             default_domain = normalize_domain(api_url)
             while True:
@@ -939,7 +957,7 @@ def collect_inputs(
                 if "@" in https_email:
                     break
                 console.err("Email must include '@'.")
-            https_http01 = Confirm.ask(
+            https_http01 = confirm_choice(
                 "Use HTTP-01 challenge (requires port 80 open)?",
                 default=True,
             )
@@ -985,7 +1003,7 @@ def handle_missing_docker(inputs: BootstrapInputs) -> None:
         console.err("Docker is missing. Install Docker and re-run.")
         raise typer.Exit(code=2)
     if not inputs.assume_yes:
-        if not Confirm.ask("Docker is required. Install now?", default=True):
+        if not confirm_choice("Docker is required. Install now?", default=True):
             console.err("Aborted: Docker is required.")
             raise typer.Exit(code=2)
     install_docker_linux()
@@ -1080,7 +1098,7 @@ def _remote_handle_missing_docker(session: SSHSession, inputs: BootstrapInputs, 
         console.err("Docker is missing. Install Docker and re-run.")
         raise typer.Exit(code=2)
     if not inputs.assume_yes:
-        if not Confirm.ask("Docker is required. Install now?", default=True):
+        if not confirm_choice("Docker is required. Install now?", default=True):
             console.err("Aborted: Docker is required.")
             raise typer.Exit(code=2)
     _remote_install_docker_linux(session, sudo=sudo)

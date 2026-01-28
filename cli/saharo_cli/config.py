@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import tomli_w
@@ -40,6 +40,9 @@ class AppConfig:
     auth: AuthConfig
     agents: dict[str, AgentConfig]
     license_api_url: str = LICENSE_API_URL_DEFAULT
+    telemetry: dict[str, bool] = field(default_factory=dict)
+    portal_session_token: str = ""
+    portal_csrf_token: str = ""
 
 
 def config_path() -> str:
@@ -52,6 +55,9 @@ def default_config() -> AppConfig:
         auth=AuthConfig(token="", token_type="bearer"),
         agents={},
         license_api_url=LICENSE_API_URL_DEFAULT,
+        telemetry={},
+        portal_session_token="",
+        portal_csrf_token="",
     )
 
 
@@ -102,6 +108,9 @@ def to_toml(cfg: AppConfig) -> dict[str, Any]:
         {
             "base_url": cfg.base_url,
             "license_api_url": cfg.license_api_url,
+            "telemetry": cfg.telemetry,
+            "portal_session_token": cfg.portal_session_token,
+            "portal_csrf_token": cfg.portal_csrf_token,
             "auth": {
                 "token": cfg.auth.token,
                 "token_type": cfg.auth.token_type,
@@ -132,6 +141,14 @@ def _prune_none(value: Any) -> Any:
 def from_toml(data: dict[str, Any]) -> AppConfig:
     base_url = normalize_base_url(str(data.get("base_url") or ""), warn=True)
     license_api_url = str(data.get("license_api_url") or "").strip()
+    portal_session_token = str(data.get("portal_session_token") or "").strip()
+    portal_csrf_token = str(data.get("portal_csrf_token") or "").strip()
+    telemetry_raw = data.get("telemetry") or {}
+    telemetry: dict[str, bool] = {}
+    if isinstance(telemetry_raw, dict):
+        for key, value in telemetry_raw.items():
+            if isinstance(value, bool):
+                telemetry[str(key)] = value
     auth_raw = data.get("auth") or {}
     token = ""
     token_type = "bearer"
@@ -170,6 +187,9 @@ def from_toml(data: dict[str, Any]) -> AppConfig:
             auth=AuthConfig(token=token, token_type=token_type),
             agents=agents,
             license_api_url=license_api_url or LICENSE_API_URL_DEFAULT,
+            telemetry=telemetry,
+            portal_session_token=portal_session_token,
+            portal_csrf_token=portal_csrf_token,
         )
 
     # Backward compatibility: profiles-based config
@@ -194,12 +214,18 @@ def from_toml(data: dict[str, Any]) -> AppConfig:
                     auth=AuthConfig(token=token, token_type="bearer"),
                     agents=agents,
                     license_api_url=license_api_url or LICENSE_API_URL_DEFAULT,
+                    telemetry=telemetry,
+                    portal_session_token=portal_session_token,
+                    portal_csrf_token=portal_csrf_token,
                 )
 
     cfg = default_config()
     cfg.agents = agents
     if license_api_url:
         cfg.license_api_url = license_api_url
+    cfg.telemetry = telemetry
+    cfg.portal_session_token = portal_session_token
+    cfg.portal_csrf_token = portal_csrf_token
     return cfg
 
 
@@ -240,6 +266,9 @@ def apply_profile(cfg: AppConfig, profile: str | None) -> AppConfig:
         auth=AuthConfig(token=token, token_type=token_type),
         agents=cfg.agents,
         license_api_url=license_api_url or cfg.license_api_url,
+        telemetry=cfg.telemetry,
+        portal_session_token=cfg.portal_session_token,
+        portal_csrf_token=cfg.portal_csrf_token,
     )
 
 

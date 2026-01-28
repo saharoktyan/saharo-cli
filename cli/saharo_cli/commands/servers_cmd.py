@@ -10,7 +10,6 @@ from datetime import datetime, timezone
 import typer
 from rich import box
 from rich.panel import Panel
-from rich.prompt import Confirm
 from rich.table import Table
 from rich.text import Text
 from saharo_client import ApiError, AuthError, NetworkError
@@ -23,11 +22,17 @@ from saharo_client.polling import wait_for_server_heartbeat
 from saharo_client.resolve import ResolveError, find_server_by_name, resolve_server_id_for_servers
 
 from . import agents_cmd
-from .host_bootstrap import DEFAULT_REGISTRY, docker_login_ssh, normalize_registry_host
+from .host_bootstrap import (
+    DEFAULT_REGISTRY,
+    docker_login_ssh,
+    fetch_registry_creds_from_license,
+    normalize_registry_host,
+)
 from .. import console
 from ..config import load_config, normalize_base_url
 from ..formatting import format_age, format_list_timestamp
 from ..http import make_client
+from ..interactive import confirm_choice, fetch_portal_licenses, select_license
 from ..ssh import is_windows
 
 app = typer.Typer(help="Servers commands.")
@@ -152,15 +157,40 @@ def _fetch_registry_creds_from_host_api(
     return extract_registry_creds_from_snapshot(snapshot if isinstance(snapshot, dict) else {})
 
 
-def _require_registry_activation(cfg, base_url_override: str | None) -> tuple[str, str, str]:
+def _require_registry_activation(
+        cfg,
+        base_url_override: str | None,
+        *,
+        lic_url: str,
+        license_key: str | None,
+        host_label: str,
+) -> tuple[str, str, str]:
     host_creds = _fetch_registry_creds_from_host_api(cfg, base_url_override)
     if host_creds:
         return host_creds
-    console.err(
-        "Registry credentials are unavailable from the host API. "
-        "Re-run `saharo host bootstrap` with a valid license key or restore host licensing."
+    if not license_key:
+        portal_licenses = fetch_portal_licenses(cfg, base_url_override=base_url_override)
+        selected_key = select_license(portal_licenses)
+        if selected_key:
+            license_key = selected_key
+        if not license_key:
+            license_key = typer.prompt("License key (input hidden)", hide_input=True)
+            if not (license_key or "").strip():
+                console.err("License key is required to fetch registry credentials.")
+                raise typer.Exit(code=2)
+    activation = fetch_registry_creds_from_license(
+        lic_url,
+        license_key=license_key,
+        machine_name=host_label,
+        force_password=True,
     )
-    raise typer.Exit(code=2)
+    if activation.registry_password is None:
+        console.err(
+            "Registry password not returned (credentials not rotated). Re-run "
+            "`saharo host bootstrap --license-key <key>` or rebind the license with rotation enabled, then retry."
+        )
+        raise typer.Exit(code=2)
+    return activation.registry_url, activation.registry_username, activation.registry_password
 
 
 def _is_registry_auth_error(text: str) -> bool:
@@ -1128,6 +1158,7 @@ def bootstrap(
         local_path: str | None = typer.Option(None, "--local-path", help="Path to local runtime deploy directory."),
         lic_url: str = typer.Option(agents_cmd.DEFAULT_LIC_URL, "--lic-url",
                                     help="License API base URL used to resolve versions."),
+        license_key: str | None = typer.Option(None, "--license-key", help="License key for registry access."),
         no_license: bool = typer.Option(False, "--no-license", help="Do not query license API for agent version."),
         agent_version: str | None = typer.Option(None, "--agent-version",
                                                  help="Exact agent version tag to deploy, e.g. 1.4.1"),
@@ -1181,7 +1212,7 @@ def bootstrap(
             ssh_host = typer.prompt("SSH host (e.g. 203.0.113.10)")
             ssh_user = typer.prompt("SSH user", default="root")
             ssh_target = f"{ssh_user}@{ssh_host}" if ssh_user else ssh_host
-        elif Confirm.ask("Install on a remote host via SSH?", default=False):
+        elif confirm_choice("Install on a remote host via SSH?", default=False):
             ssh_host = typer.prompt("SSH host (e.g. 203.0.113.10)")
             ssh_user = typer.prompt("SSH user", default="root")
             ssh_target = f"{ssh_user}@{ssh_host}" if ssh_user else ssh_host
@@ -1197,10 +1228,10 @@ def bootstrap(
         port = typer.prompt("SSH port", default=port)
     if not local:
         if not key and not password:
-            if Confirm.ask("Use an SSH private key for authentication?", default=True):
+            if confirm_choice("Use an SSH private key for authentication?", default=True):
                 key_input = typer.prompt(
                     "SSH private key path",
-33                    default="~/.ssh/id_ed25519",
+                    default="~/.ssh/id_ed25519",
                 )
                 try:
                     key = _validate_ssh_key_path(key_input)
@@ -1214,7 +1245,7 @@ def bootstrap(
             password = False
         ssh_user = ssh_target.split("@", 1)[0] if "@" in ssh_target else ""
         if ssh_user and ssh_user != "root" and not sudo:
-            if not Confirm.ask(
+            if not confirm_choice(
                 "Remote user is not root. Use sudo privileges (required)?",
                 default=True,
             ):
@@ -1310,7 +1341,13 @@ def bootstrap(
         if agent_id is None:
             agents_cmd._cleanup_agent_installation_local(allow_existing_state=False, label="bootstrap")
             env_path = f"{compose_dir}/.env"
-            registry_url, registry_username, registry_password = _require_registry_activation(cfg, base_url)
+            registry_url, registry_username, registry_password = _require_registry_activation(
+                cfg,
+                base_url,
+                lic_url=lic_url,
+                license_key=license_key,
+                host_label=name or host,
+            )
             env_content = _render_agent_env(
                 agent_api_url=agent_api_url,
                 invite_token=invite_token,
@@ -1432,7 +1469,13 @@ def bootstrap(
                     console.err(res.stderr.strip() or "Failed to create remote directory.")
                     raise typer.Exit(code=2)
 
-                registry_url, registry_username, registry_password = _require_registry_activation(cfg, base_url)
+                registry_url, registry_username, registry_password = _require_registry_activation(
+                    cfg,
+                    base_url,
+                    lic_url=lic_url,
+                    license_key=license_key,
+                    host_label=name or host,
+                )
                 compose_content = agents_cmd._render_agent_compose(registry, resolved_tag)
                 if sudo:
                     res = session.run_input_privileged(

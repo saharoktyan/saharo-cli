@@ -461,6 +461,10 @@ class SaharoClient:
         data = self._t.request("POST", path, json_body=None)
         return data if isinstance(data, dict) else {"raw": data}
 
+    def portal_licenses(self) -> list[dict[str, Any]]:
+        data = self._t.request("GET", "/portal/licenses")
+        return data if isinstance(data, list) else []
+
     def admin_server_awg_params_get(self, server_id: int) -> dict[str, Any]:
         return self._request_json(
             "GET",
