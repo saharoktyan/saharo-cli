@@ -62,7 +62,6 @@ def telemetry(
         console.ok("Telemetry enabled.")
     else:
         console.ok("Telemetry disabled.")
-    console.info("Portal: https://portal.saharoktyan.ru")
 
 
 @app.command("auth", help="Authenticate with the Saharo portal (stores session token).")
@@ -124,47 +123,59 @@ def status(
             raise typer.Exit(code=2)
         data = resp.json() if resp.content else {}
 
-    username = data.get("username") or data.get("email") or "unknown"
-    console.ok(f"Portal session: authenticated as {username}.")
-    if data.get("is_2fa_enabled"):
-        console.info("2FA: enabled")
+        telemetry_payload = {}
+        licenses_payload = []
+        csrf = (cfg.portal_csrf_token or "").strip()
+        if csrf:
+            client.cookies.set("saharo_csrf", csrf)
+            client.headers["X-CSRF-Token"] = csrf
+            telemetry_resp = client.get("/v1/account/telemetry")
+            if telemetry_resp.status_code < 400:
+                telemetry_payload = telemetry_resp.json() if telemetry_resp.content else {}
+            licenses_resp = client.get("/v1/account/licenses")
+            if licenses_resp.status_code < 400:
+                licenses_payload = licenses_resp.json() if licenses_resp.content else []
+        else:
+            console.warn("CSRF missing: re-authenticate to see telemetry and licenses.")
 
+    username = data.get("username") or "unknown"
+    email = data.get("email") or "unknown"
+    providers = data.get("linked_providers") or []
+    if not isinstance(providers, list):
+        providers = []
+    github = "enabled" if "github" in providers else "disabled"
+    google = "enabled" if "google" in providers else "disabled"
+    two_fa = "enabled" if data.get("is_2fa_enabled") else "disabled"
+    licenses_count = len(licenses_payload) if isinstance(licenses_payload, list) else 0
 
-@app.command("telemetry-status", help="Show current portal telemetry status.")
-def telemetry_status(
-        lic_url: str | None = typer.Option(None, "--lic-url", help="License API base URL used for portal auth."),
-) -> None:
-    cfg = load_config()
-    token = (cfg.portal_session_token or "").strip()
-    if not token:
-        console.info("Portal telemetry: not authenticated.")
-        console.info("Run: saharo portal auth")
-        return
+    console.print("• Profile info")
+    console.print(f"  Username: {username}")
+    console.print(f"  Email: {email}")
+    console.print(f"  2FA: {two_fa}")
+    github_label = f"[green]github[/]" if github == "enabled" else f"[red]github[/]"
+    google_label = f"[green]google[/]" if google == "enabled" else f"[red]google[/]"
+    console.print(f"  Social integrations: {github_label}, {google_label}")
+    console.print("")
+    console.print(f"• Provisioned licenses: {licenses_count}")
+    if isinstance(licenses_payload, list) and licenses_payload:
+        for lic in licenses_payload:
+            if not isinstance(lic, dict):
+                continue
+            last4 = str(lic.get("key_last4") or "----")
+            status = str(lic.get("status") or "unknown")
+            name = str(lic.get("name") or lic.get("notes") or "-")
+            console.print(f"  - ****{last4} | {status} | {name}")
+    console.print("")
 
-    lic_url_value = (lic_url or resolve_license_api_url(cfg)).strip().rstrip("/")
-    if not lic_url_value:
-        console.err("License API URL is not configured.")
-        raise typer.Exit(code=2)
-
-    with httpx.Client(base_url=lic_url_value, timeout=10.0) as client:
-        client.headers["X-Session-Token"] = token
-        resp = client.get("/v1/account/telemetry")
-        if resp.status_code in (401, 403):
-            console.err("Portal session is invalid or expired.")
-            return
-        if resp.status_code >= 400:
-            console.err(f"Portal telemetry status failed: HTTP {resp.status_code}")
-            raise typer.Exit(code=2)
-        payload = resp.json() if resp.content else {}
-        telemetry = payload.get("telemetry") if isinstance(payload, dict) else None
-        enabled = telemetry.get("enabled") if isinstance(telemetry, dict) else None
-
+    telemetry = telemetry_payload.get("telemetry") if isinstance(telemetry_payload, dict) else None
+    enabled = telemetry.get("enabled") if isinstance(telemetry, dict) else None
     if enabled is True:
-        console.ok("Telemetry status: enabled")
+        telemetry_status = "enabled"
     elif enabled is False:
-        console.ok("Telemetry status: disabled")
+        telemetry_status = "disabled"
     else:
-        console.info("Telemetry status: unknown")
+        telemetry_status = "unknown"
+    console.print(f"• Telemetry: {telemetry_status}")
 
 
 @app.command("logout", help="Revoke local portal session token.")
