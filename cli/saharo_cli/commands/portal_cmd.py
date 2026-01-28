@@ -96,14 +96,14 @@ def _extract_error_message(resp: httpx.Response) -> str:
     return ""
 
 
-@app.command("status", help="Show current portal session status.")
-def status(
+@app.command("profile", help="Show current portal profile and telemetry.")
+def profile(
         lic_url: str | None = typer.Option(None, "--lic-url", help="License API base URL used for portal auth."),
 ) -> None:
     cfg = load_config()
     token = (cfg.portal_session_token or "").strip()
     if not token:
-        console.info("Portal status: not authenticated.")
+        console.info("Portal profile: not authenticated.")
         console.info("Run: saharo portal auth")
         return
 
