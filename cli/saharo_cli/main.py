@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+
 import typer
 
 from .auth_state import resolve_auth_context
@@ -18,7 +20,7 @@ def _build_app() -> typer.Typer:
     app = typer.Typer(
         name="saharo",
         help="saharo CLI",
-        no_args_is_help=True,
+        no_args_is_help=False,
     )
 
     ctx = resolve_auth_context(check_remote=False)
@@ -55,11 +57,25 @@ def _build_app() -> typer.Typer:
             app.add_typer(portal_cmd.app, name="portal")
             app.command("invite-admin", hidden=True)(invite_cmd.create_invite)
 
-    @app.callback()
+    @app.callback(invoke_without_command=True)
     def _main(
+            ctx: typer.Context,
             verbose: bool = typer.Option(False, "-v", "--verbose", help="Verbose logs."),
     ):
         setup_logging(verbose)
+        if ctx.invoked_subcommand is None and len(sys.argv) == 1:
+            from .interactive_menu import run_interactive_menu
+
+            tokens = run_interactive_menu(app)
+            if not tokens:
+                raise typer.Exit(code=0)
+            command = typer.main.get_command(app)
+            command.main(
+                args=tokens,
+                prog_name=ctx.info_name or sys.argv[0],
+                standalone_mode=True,
+            )
+            raise typer.Exit(code=0)
 
     return app
 

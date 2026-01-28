@@ -17,11 +17,12 @@ dependencies = [
     "saharo-client @ file:./lib",
     "cryptography>=42.0.0",
     "httpx>=0.27.0",
-    "prompt_toolkit"
+    "prompt_toolkit",
+    "pyte"
 ]
 
 [project.scripts]
-saharo = "saharo_cli.main:app"
+saharo = "saharo_cli.entrypoint:main"
 
 [tool.setuptools]
 packages = ["saharo_cli", "saharo_cli.commands"]

@@ -1,2 +1,2 @@
 [console_scripts]
-saharo = saharo_cli.main:app
+saharo = saharo_cli.entrypoint:main

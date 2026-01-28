@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import json
 import logging
 import os
@@ -607,6 +608,8 @@ def host_bootstrap(
         raise typer.Exit(code=2)
 
     if not inputs.assume_yes:
+        if os.getenv("SAHARO_INTERACTIVE") == "1":
+            console.clear()
         confirm_message = Text("Proceed with writing files and starting containers?", style="bold")
         if not confirm_choice(confirm_message, default=True):
             console.err("Aborted by user.")
@@ -792,6 +795,8 @@ def _host_bootstrap_ssh(
             raise typer.Exit(code=2)
 
         if not inputs.assume_yes:
+            if os.getenv("SAHARO_INTERACTIVE") == "1":
+                console.clear()
             confirm_message = Text("Proceed with writing files and starting containers?", style="bold")
             if not confirm_choice(confirm_message, default=True):
                 console.err("Aborted by user.")

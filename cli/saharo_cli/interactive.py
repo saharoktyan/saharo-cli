@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import sys
 from typing import Iterable
 
 import questionary
@@ -161,6 +162,25 @@ def select_toggle(message: str, *, default_enabled: bool | None = None) -> bool:
     return bool(result)
 
 
+def select_item(message: str, choices: list[Choice], *, clear_after: bool = False) -> str | None:
+    try:
+        result = questionary.select(
+            message,
+            choices=choices,
+            default=None,
+            use_shortcuts=False,
+            pointer="▶",
+            style=_SELECT_STYLE,
+        ).ask()
+    except KeyboardInterrupt:
+        _abort_interactive()
+    if result is None:
+        _abort_interactive()
+    if clear_after:
+        _clear_prompt(len(choices) + 1)
+    return str(result)
+
+
 def persist_telemetry_choice(host_key: str, enabled: bool) -> None:
     cfg = load_config()
     cfg.telemetry[host_key] = enabled
@@ -170,3 +190,13 @@ def persist_telemetry_choice(host_key: str, enabled: bool) -> None:
 def _abort_interactive() -> None:
     console.err("Aborted by user.")
     raise typer.Exit(code=1)
+
+
+def _clear_prompt(lines: int) -> None:
+    if not sys.stdout.isatty() or lines <= 0:
+        return
+    # Clear the prompt block so nested menus don't spam scrollback.
+    for _ in range(lines):
+        sys.stdout.write("\x1b[2K\x1b[1A")
+    sys.stdout.write("\x1b[2K\r")
+    sys.stdout.flush()

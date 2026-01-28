@@ -6,10 +6,12 @@ saharo_cli/auth_state.py
 saharo_cli/compat.py
 saharo_cli/config.py
 saharo_cli/console.py
+saharo_cli/entrypoint.py
 saharo_cli/errors.py
 saharo_cli/formatting.py
 saharo_cli/http.py
 saharo_cli/interactive.py
+saharo_cli/interactive_menu.py
 saharo_cli/keys.py
 saharo_cli/license_resolver.py
 saharo_cli/logging_.py
