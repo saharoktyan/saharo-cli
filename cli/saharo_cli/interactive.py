@@ -200,3 +200,118 @@ def _clear_prompt(lines: int) -> None:
         sys.stdout.write("\x1b[2K\x1b[1A")
     sys.stdout.write("\x1b[2K\r")
     sys.stdout.flush()
+def select_user(client) -> int:
+    try:
+        data = client.admin_users_list(limit=100)
+    except ApiError as e:
+        console.err(f"Failed to list users: {e}")
+        raise typer.Exit(code=2)
+    
+    items = data.get("items") if isinstance(data, dict) else []
+    if not items:
+        console.err("No users found.")
+        raise typer.Exit(code=2)
+    
+    choices = []
+    for u in items:
+        username = u.get("username") or "unnamed"
+        label = f"{username} (id={u.get('id')}) - {u.get('role')}"
+        choices.append(Choice(title=label, value=str(u.get("id"))))
+    
+    selected_id = select_item("Select a user", choices)
+    if not selected_id:
+        raise typer.Exit(code=1)
+    return int(selected_id)
+
+
+def select_server(client) -> int:
+    try:
+        data = client.admin_servers_list(limit=100)
+    except ApiError as e:
+        console.err(f"Failed to list servers: {e}")
+        raise typer.Exit(code=2)
+    
+    items = data.get("items") if isinstance(data, dict) else []
+    if not items:
+        console.err("No servers found.")
+        raise typer.Exit(code=2)
+    
+    choices = []
+    for s in items:
+        name = s.get("name") or "unnamed"
+        label = f"{name} (id={s.get('id')}) - {s.get('public_host') or 'no host'}"
+        choices.append(Choice(title=label, value=str(s.get("id"))))
+    
+    selected_id = select_item("Select a server", choices)
+    if not selected_id:
+        raise typer.Exit(code=1)
+    return int(selected_id)
+
+
+def select_agent(client) -> int:
+    try:
+        data = client.admin_agents_list(include_deleted=False, limit=100)
+    except ApiError as e:
+        console.err(f"Failed to list agents: {e}")
+        raise typer.Exit(code=2)
+    
+    agents = data.get("items") if isinstance(data, dict) else []
+    if not agents:
+        console.err("No agents found.")
+        raise typer.Exit(code=2)
+    
+    choices = []
+    for a in agents:
+        name = a.get("name") or "unnamed"
+        label = f"{name} (id={a.get('id')}) - {a.get('status')}"
+        choices.append(Choice(title=label, value=str(a.get("id"))))
+    
+    selected_id = select_item("Select an agent", choices)
+    if not selected_id:
+        raise typer.Exit(code=1)
+    return int(selected_id)
+
+
+def select_protocol(client, server_id: int) -> str:
+    try:
+        data = client.admin_server_protocols_list(server_id)
+    except ApiError as e:
+        console.err(f"Failed to list server protocols: {e}")
+        raise typer.Exit(code=2)
+    
+    if not data:
+        console.err("No protocols available on this server.")
+        raise typer.Exit(code=2)
+    
+    choices = []
+    for p in data:
+        code = p.get("code") or p.get("protocol") or p.get("key")
+        label = f"{code} ({p.get('status', 'unknown')})"
+        choices.append(Choice(title=label, value=str(code)))
+    
+    selected = select_item("Select a protocol", choices)
+    if not selected:
+        raise typer.Exit(code=1)
+    return selected
+
+
+def select_custom_service(client) -> int:
+    try:
+        data = client.admin_custom_services_list()
+    except ApiError as e:
+        console.err(f"Failed to list custom services: {e}")
+        raise typer.Exit(code=2)
+    
+    if not data:
+        console.err("No custom services found.")
+        raise typer.Exit(code=2)
+    
+    choices = []
+    for s in data:
+        label = f"{s.get('display_name') or s.get('code')} (id={s.get('id')})"
+        choices.append(Choice(title=label, value=str(s.get("id"))))
+    
+    selected_id = select_item("Select a custom service", choices)
+    if not selected_id:
+        raise typer.Exit(code=1)
+    return int(selected_id)

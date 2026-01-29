@@ -486,3 +486,57 @@ class SaharoClient:
             json_body=None,
         )
         return data if isinstance(data, dict) else {"raw": data}
+
+    # --- Custom Services ---
+    def admin_custom_services_list(self, *, enabled_only: bool = False) -> list[dict[str, Any]]:
+        params = {"enabled_only": "true"} if enabled_only else {}
+        query = urlencode(params) if params else ""
+        path = f"/admin/custom-services{f'?{query}' if query else ''}"
+        data = self._t.request("GET", path)
+        return data if isinstance(data, list) else (data.get("items") if isinstance(data, dict) else [])
+
+    def admin_custom_service_get(self, service_id: int) -> dict[str, Any]:
+        data = self._t.request("GET", f"/admin/custom-services/{int(service_id)}")
+        return data if isinstance(data, dict) else {"raw": data}
+
+    def admin_custom_service_get_by_code(self, code: str) -> dict[str, Any]:
+        data = self._t.request("GET", f"/admin/custom-services/by-code/{code}")
+        return data if isinstance(data, dict) else {"raw": data}
+
+    def admin_custom_service_create(self, *, code: str, display_name: str, yaml_definition: str) -> dict[str, Any]:
+        body = {
+            "code": code,
+            "display_name": display_name,
+            "yaml_definition": yaml_definition,
+        }
+        data = self._t.request("POST", "/admin/custom-services", json_body=body)
+        return data if isinstance(data, dict) else {"raw": data}
+
+    def admin_custom_service_update(
+            self,
+            service_id: int,
+            *,
+            display_name: str | None = None,
+            yaml_definition: str | None = None,
+            enabled: bool | None = None,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {}
+        if display_name is not None:
+            body["display_name"] = display_name
+        if yaml_definition is not None:
+            body["yaml_definition"] = yaml_definition
+        if enabled is not None:
+            body["enabled"] = enabled
+        data = self._t.request("PATCH", f"/admin/custom-services/{int(service_id)}", json_body=body)
+        return data if isinstance(data, dict) else {"raw": data}
+
+    def admin_custom_service_delete(self, service_id: int) -> None:
+        self._t.request("DELETE", f"/admin/custom-services/{int(service_id)}")
+
+    def admin_server_custom_service_instances(self, server_id: int) -> list[dict[str, Any]]:
+        data = self._t.request("GET", f"/admin/custom-services/servers/{int(server_id)}/instances")
+        return data if isinstance(data, list) else (data.get("items") if isinstance(data, dict) else [])
+
+    def admin_agent_custom_services(self, agent_id: int) -> list[dict[str, Any]]:
+        data = self._t.request("GET", f"/admin/custom-services/agents/{int(agent_id)}/services")
+        return data if isinstance(data, list) else (data.get("items") if isinstance(data, dict) else [])

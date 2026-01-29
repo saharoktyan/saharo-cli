@@ -42,6 +42,7 @@ saharo_cli/commands/logs_cmd.py
 saharo_cli/commands/portal_cmd.py
 saharo_cli/commands/self_cmd.py
 saharo_cli/commands/servers_cmd.py
+saharo_cli/commands/services_cmd.py
 saharo_cli/commands/settings_cmd.py
 saharo_cli/commands/updates_cmd.py
 saharo_cli/commands/users_cmd.py

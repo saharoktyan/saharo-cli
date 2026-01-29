@@ -11,6 +11,7 @@ from saharo_client.resolve import resolve_agent_id_for_logs, resolve_server_id_f
 from .. import console
 from ..config import load_config
 from ..http import make_client
+from ..interactive import select_server, select_agent
 
 LOGS_USAGE = """\
 Usage:
@@ -90,16 +91,19 @@ def logs_api(
     _docker_logs(container, lines=lines, follow=follow)
 
 
-@app.command("agent", help="Show logs from a remote runtime via the API.", hidden=True)
+@app.command("agent", help="Show logs from a remote runtime via the API.")
 def logs_agent(
-        agent_name_or_id: str = typer.Argument(..., help="Runtime name or numeric id."),
+        agent_name_or_id: str | None = typer.Argument(None, help="Runtime name or numeric id."),
         follow: bool = typer.Option(False, "--follow", help="Follow logs by polling."),
         lines: int = typer.Option(DEFAULT_LINES, "--lines", min=1, help="Number of lines to show."),
 ):
     cfg = load_config()
     client = make_client(cfg, profile=None, base_url_override=None)
     try:
-        agent_id = _resolve_agent_id(client, agent_name_or_id)
+        if agent_name_or_id is None:
+            agent_id = select_agent(client)
+        else:
+            agent_id = _resolve_agent_id(client, agent_name_or_id)
         _tail_remote_logs(
             client,
             agent_id=agent_id,
@@ -117,14 +121,17 @@ def logs_agent(
 
 @app.command("server", help="Show logs for server services via the attached runtime.")
 def logs_server(
-        server_name_or_id: str = typer.Argument(..., help="Server name or numeric id."),
+        server_name_or_id: str | None = typer.Argument(None, help="Server name or numeric id."),
         follow: bool = typer.Option(False, "--follow", help="Follow logs by polling."),
         lines: int = typer.Option(DEFAULT_LINES, "--lines", min=1, help="Number of lines to show."),
 ):
     cfg = load_config()
     client = make_client(cfg, profile=None, base_url_override=None)
     try:
-        server_id = _resolve_server_id(client, server_name_or_id)
+        if server_name_or_id is None:
+            server_id = select_server(client)
+        else:
+            server_id = _resolve_server_id(client, server_name_or_id)
         _tail_server_logs(client, server_id=server_id, follow=follow, lines=lines)
     except ApiError as exc:
         _render_api_error(exc, target=f"server {server_name_or_id}")

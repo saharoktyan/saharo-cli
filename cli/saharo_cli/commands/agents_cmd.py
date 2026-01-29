@@ -21,6 +21,8 @@ from .. import console
 from ..config import load_config, AgentConfig, AppConfig, save_config, normalize_base_url, resolve_license_api_url
 from ..formatting import format_age, format_list_timestamp
 from ..http import make_client
+from ..interactive import select_item, select_agent
+from questionary import Choice
 from ..license_resolver import (
     IMAGE_COMPONENTS,
     LicenseEntitlements,
@@ -128,9 +130,9 @@ def list_agents(
         console.info(f"page={page}/{pages} total={total}")
 
 
-@app.command("show")
-def show_agent(
-        agent_id: int = typer.Argument(...),
+@app.command("get")
+def get_agent(
+        agent_id: int | None = typer.Argument(None, help="Agent ID."),
         profile: str | None = typer.Option(None, "--profile", help="Config profile name."),
         base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
         json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
@@ -139,6 +141,9 @@ def show_agent(
     client = make_client(cfg, profile=profile, base_url_override=base_url)
 
     try:
+        if agent_id is None:
+            agent_id = select_agent(client)
+        
         agent = client.agents_get(agent_id)
     except ApiError as e:
         if e.status_code == 404:
@@ -170,20 +175,24 @@ def show_agent(
 
 @app.command("delete")
 def delete_agent(
-        agent_id: int = typer.Argument(...),
+        agent_id: int | None = typer.Argument(None, help="Agent ID."),
         yes: bool = typer.Option(False, "--yes", help="Skip confirmation prompt."),
         force: bool = typer.Option(False, "--force", help="Detach servers before deleting the agent."),
         base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
         json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
-    if not yes:
-        confirmed = typer.confirm(f"Delete agent {agent_id}?", default=False)
-        if not confirmed:
-            console.info("Aborted.")
-            raise typer.Exit(code=0)
     cfg = load_config()
     client = make_client(cfg, profile=None, base_url_override=base_url)
+    
     try:
+        if agent_id is None:
+            agent_id = select_agent(client)
+        
+        if not yes:
+            if not typer.confirm(f"Delete agent {agent_id}?", default=False):
+                console.info("Aborted.")
+                raise typer.Exit(code=0)
+
         data = client.admin_agent_delete(agent_id, force=force)
     except ApiError as e:
         if e.status_code == 404:
@@ -213,7 +222,7 @@ def delete_agent(
 
 @app.command("uninstall", help="Run remote uninstall on an agent-managed server.")
 def uninstall_agent(
-        agent_name_or_id: str = typer.Argument(..., help="Agent name or numeric id."),
+        agent_name_or_id: str | None = typer.Argument(None, help="Agent name or numeric id."),
         force: bool = typer.Option(False, "--force", help="Proceed even if the agent is attached to servers."),
         dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be removed without deleting anything."),
         base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
@@ -222,7 +231,10 @@ def uninstall_agent(
     cfg = load_config()
     client = make_client(cfg, profile=None, base_url_override=base_url)
     try:
-        agent_id = _resolve_agent_id(client, agent_name_or_id)
+        if agent_name_or_id is None:
+            agent_id = select_agent(client)
+        else:
+            agent_id = _resolve_agent_id(client, agent_name_or_id)
         data = client.admin_agent_uninstall(agent_id, force=force, dry_run=dry_run)
     except ApiError as e:
         if e.status_code == 404:
@@ -255,7 +267,7 @@ def uninstall_agent(
 
 @app.command("purge", help="Destroy all saharo assets on a remote host.")
 def purge_agent(
-        agent_name_or_id: str = typer.Argument(..., help="Agent name or numeric id."),
+        agent_name_or_id: str | None = typer.Argument(None, help="Agent name or numeric id."),
         yes_i_really_want_to_delete_everything: bool = typer.Option(
             False,
             "--yes-i-really-want-to-delete-everything",
@@ -266,18 +278,13 @@ def purge_agent(
         base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
         json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
-    if not yes_i_really_want_to_delete_everything:
-        console.err("Refusing to purge without --yes-i-really-want-to-delete-everything.")
-        raise typer.Exit(code=2)
-
-    console.warn(
-        "WARNING: This will delete ALL saharo containers, volumes, networks, configs, and install dirs on the remote host."
-    )
-
     cfg = load_config()
     client = make_client(cfg, profile=None, base_url_override=base_url)
     try:
-        agent_id = _resolve_agent_id(client, agent_name_or_id)
+        if agent_name_or_id is None:
+            agent_id = select_agent(client)
+        else:
+            agent_id = _resolve_agent_id(client, agent_name_or_id)
         data = client.admin_agent_purge(agent_id, force=force, dry_run=dry_run)
     except ApiError as e:
         if e.status_code == 404:

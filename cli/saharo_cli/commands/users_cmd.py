@@ -9,13 +9,41 @@ from .invite_cmd import create_invite
 from .. import console
 from ..config import load_config
 from ..http import make_client
+from ..interactive import select_item
+from questionary import Choice
 
 app = typer.Typer(help="Users commands (admin only).")
 
 app.command("invite")(create_invite)
 
 
+def _select_user(client) -> int:
+    try:
+        data = client.admin_users_list(limit=100)
+    except ApiError as e:
+        console.err(f"Failed to list users: {e}")
+        raise typer.Exit(code=2)
+    
+    items = data.get("items") if isinstance(data, dict) else []
+    if not items:
+        console.err("No users found.")
+        raise typer.Exit(code=2)
+    
+    choices = []
+    for u in items:
+        username = u.get("username") or "unnamed"
+        label = f"{username} (id={u.get('id')}) - {u.get('role')}"
+        choices.append(Choice(title=label, value=str(u.get("id"))))
+    
+    selected_id = select_item("Select a user", choices)
+    if not selected_id:
+        raise typer.Exit(code=1)
+    return int(selected_id)
+
+
 def _resolve_user_id(client, user_id: int | None, username: str | None) -> int:
+    if user_id is None and username is None:
+        return _select_user(client)
     try:
         return resolve_user_id_for_users(client, user_id, username)
     except ResolveError as exc:
@@ -86,8 +114,8 @@ def list_users(
     console.console.print(table)
 
 
-@app.command("show")
-def show_user(
+@app.command("get")
+def get_user(
         user_id: int | None = typer.Argument(None, help="User ID."),
         username: str | None = typer.Option(None, "--u", help="Username."),
         base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
@@ -120,6 +148,15 @@ def show_user(
     console.console.print(f"  role: {user.get('role')}")
     console.console.print(f"  telegram_id: {user.get('telegram_id')}")
     _print_subscription(sub)
+
+
+@app.command("show", hidden=True)
+def show_user(
+        user_id: int | None = typer.Argument(None, help="User ID."),
+        username: str | None = typer.Option(None, "--u", help="Username."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+):
+    get_user(user_id=user_id, username=username, base_url=base_url)
 
 
 @app.command("freeze")

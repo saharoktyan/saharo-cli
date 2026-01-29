@@ -23,6 +23,7 @@ app = typer.Typer(help="Manage CLI updates from your host.")
 _CACHE_UPDATE_DIR = Path.home() / ".cache" / "saharo" / "update"
 _CACHE_UPDATE_PATH = _CACHE_UPDATE_DIR / "saharo.new"
 _CACHE_HELPER_PATH = _CACHE_UPDATE_DIR / "apply_update.sh"
+_CACHE_HELPER_WIN_PATH = _CACHE_UPDATE_DIR / "apply_update.ps1"
 
 
 def _platform_id() -> str:
@@ -78,6 +79,8 @@ def _is_standalone_binary(path: Path) -> bool:
         return False
     if header.startswith(b"\x7fELF"):
         return True
+    if _is_windows() and header.startswith(b"MZ"):
+        return True
     if header in {
         b"\xfe\xed\xfa\xce",
         b"\xfe\xed\xfa\xcf",
@@ -116,7 +119,35 @@ exec "$TARGET" "$@"
     os.chmod(_CACHE_HELPER_PATH, 0o700)
 
 
+def _write_helper_script_windows() -> None:
+    _CACHE_UPDATE_DIR.mkdir(parents=True, exist_ok=True)
+    script = r"""$target = $args[0]
+$new = $args[1]
+$pid = [int]$args[2]
+$restartArgs = @()
+if ($args.Length -gt 3) { $restartArgs = $args[3..($args.Length - 1)] }
+while (Get-Process -Id $pid -ErrorAction SilentlyContinue) {
+  Start-Sleep -Milliseconds 200
+}
+if (Test-Path $target) {
+  Remove-Item -Force $target
+}
+Move-Item -Force $new $target
+Start-Process -FilePath $target -ArgumentList $restartArgs
+"""
+    _CACHE_HELPER_WIN_PATH.write_text(script, encoding="utf-8")
+
+
 def _spawn_update_helper(target: Path, restart_args: list[str]) -> None:
+    if _is_windows():
+        _write_helper_script_windows()
+        ps = shutil.which("powershell") or shutil.which("pwsh") or "powershell"
+        subprocess.Popen(
+            [ps, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(_CACHE_HELPER_WIN_PATH),
+             str(target), str(_CACHE_UPDATE_PATH), str(os.getpid()), *restart_args],
+            close_fds=True,
+        )
+        return
     _write_helper_script()
     subprocess.Popen(
         ["/bin/sh", str(_CACHE_HELPER_PATH), str(target), str(_CACHE_UPDATE_PATH), str(os.getpid()), *restart_args],
@@ -175,10 +206,6 @@ def update_self() -> None:
         warn("Unable to locate saharo executable for in-place update.")
         info("Download the latest CLI binary from the Saharo portal.")
         return
-    if _is_windows():
-        warn("CLI auto-update is not available on Windows yet.")
-        info("Please download the latest release and replace the binary manually.")
-        raise SystemExit(1)
     if not _is_standalone_binary(target):
         warn("CLI was not installed as a standalone binary.")
         info("Download the standalone CLI binary from the Saharo portal.")

@@ -21,6 +21,9 @@ from saharo_client.registry import (
 from saharo_client.polling import wait_for_server_heartbeat
 from saharo_client.resolve import ResolveError, find_server_by_name, resolve_server_id_for_servers
 
+from ..interactive import confirm_choice, fetch_portal_licenses, select_license, select_item, select_server, select_protocol
+from questionary import Choice
+
 from . import agents_cmd
 from .host_bootstrap import (
     DEFAULT_REGISTRY,
@@ -248,7 +251,7 @@ def _resolve_server_id_or_exit(client, server_ref: str) -> int:
 
 @protocol_app.command("list")
 def protocol_list(
-        server_ref: str = typer.Option(..., "--server", help="Server ID or exact name."),
+        server_ref: str | None = typer.Option(None, "--server", help="Server ID or exact name."),
         base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
         json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
@@ -293,7 +296,7 @@ def protocol_list(
 @protocol_app.command("bootstrap")
 def protocol_bootstrap(
         protocol: str = typer.Argument(..., help="Protocol to bootstrap (awg, xray, etc)."),
-        server_ref: str = typer.Option(..., "--server", help="Server ID or exact name."),
+        server_ref: str | None = typer.Option(None, "--server", help="Server ID or exact name."),
         force: bool = typer.Option(False, "--force", help="Reinstall even if container exists."),
         wait: bool = typer.Option(True, "--wait/--no-wait", help="Wait for bootstrap job to finish."),
         wait_timeout: int = typer.Option(900, "--wait-timeout", help="Max seconds to wait for bootstrap."),
@@ -428,7 +431,7 @@ def bootstrap_server(
 @protocol_app.command("validate")
 def protocol_validate(
         protocol: str = typer.Argument(..., help="Protocol to validate (awg, xray, etc)."),
-        server_ref: str = typer.Option(..., "--server", help="Server ID or exact name."),
+        server_ref: str | None = typer.Option(None, "--server", help="Server ID or exact name."),
         wait: bool = typer.Option(True, "--wait/--no-wait", help="Wait for validate job to finish."),
         wait_timeout: int = typer.Option(300, "--wait-timeout", help="Max seconds to wait for validate."),
         wait_interval: int = typer.Option(5, "--wait-interval", help="Poll interval in seconds."),
@@ -487,7 +490,7 @@ def protocol_validate(
 
 @protocol_awg_app.command("params")
 def protocol_awg_params(
-        server_ref: str = typer.Option(..., "--server", help="Server ID or exact name."),
+        server_ref: str | None = typer.Option(None, "--server", help="Server ID or exact name."),
         show: bool = typer.Option(False, "--show", help="Show current AWG params for server (no changes)."),
         jc: str | None = typer.Option(None, "--jc"),
         jmin: str | None = typer.Option(None, "--jmin"),
@@ -607,7 +610,9 @@ def _age_from_iso(ts: str | None) -> str:
         return "-"
 
 
-def _resolve_server_id(client, server_ref: str) -> int:
+def _resolve_server_id(client, server_ref: str | None) -> int:
+    if server_ref is None:
+        return select_server(client)
     try:
         return resolve_server_id_for_servers(client, server_ref)
     except ResolveError as exc:
@@ -845,7 +850,7 @@ def create_server(
 
 
 def _show_server_impl(
-        server_ref: str = typer.Argument(..., help="Server ID or exact name."),
+        server_ref: str | None = typer.Argument(None, help="Server ID or exact name."),
         base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
         json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
@@ -887,7 +892,7 @@ def _show_server_impl(
 
 @app.command("get")
 def get_server(
-        server_ref: str = typer.Argument(..., help="Server ID or exact name."),
+        server_ref: str | None = typer.Argument(None, help="Server ID or exact name."),
         base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
         json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
@@ -896,7 +901,7 @@ def get_server(
 
 @app.command("show", hidden=True)
 def show_server(
-        server_ref: str = typer.Argument(..., help="Server ID or exact name."),
+        server_ref: str | None = typer.Argument(None, help="Server ID or exact name."),
         base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
         json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
@@ -905,7 +910,7 @@ def show_server(
 
 @app.command("status")
 def server_status(
-        server_ref: str = typer.Argument(..., help="Server ID or exact name."),
+        server_ref: str | None = typer.Argument(None, help="Server ID or exact name."),
         base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
         json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
         raw: bool = typer.Option(False, "--raw", help="Show raw last_status JSON (debug)."),
@@ -1029,7 +1034,7 @@ def server_status(
 
 
 def _detach_server_impl(
-        server_ref: str = typer.Argument(..., help="Server ID or exact name."),
+        server_ref: str | None = typer.Argument(None, help="Server ID or exact name."),
         base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
         json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
@@ -1058,7 +1063,7 @@ def _detach_server_impl(
 
 @app.command("detach")
 def detach_server(
-        server_ref: str = typer.Argument(..., help="Server ID or exact name."),
+        server_ref: str | None = typer.Argument(None, help="Server ID or exact name."),
         base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
         json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
@@ -1067,7 +1072,7 @@ def detach_server(
 
 @app.command("detach-agent", hidden=True)
 def detach_server_agent(
-        server_ref: str = typer.Argument(..., help="Server ID or exact name."),
+        server_ref: str | None = typer.Argument(None, help="Server ID or exact name."),
         base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
         json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
@@ -1076,7 +1081,7 @@ def detach_server_agent(
 
 @app.command("delete")
 def delete_server(
-        server_ref: str = typer.Argument(..., help="Server ID or exact name."),
+        server_ref: str | None = typer.Argument(None, help="Server ID or exact name."),
         force: bool = typer.Option(False, "--force", help="Detach runtime before deleting the server."),
         yes: bool = typer.Option(False, "--yes", help="Skip confirmation prompt."),
         base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
@@ -1111,6 +1116,36 @@ def delete_server(
         console.print_json(data)
         return
     console.ok(f"Deleted server {server_id}.")
+
+
+@app.command("logs")
+def server_logs(
+        server_ref: str | None = typer.Argument(None, help="Server ID or exact name."),
+        lines: int = typer.Option(50, "--lines", help="Number of last lines to fetch."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+):
+    """Fetch logs from a server."""
+    cfg = load_config()
+    client = make_client(cfg, profile=None, base_url_override=base_url)
+    try:
+        server_id = _resolve_server_id(client, server_ref)
+        data = client.admin_server_logs(server_id, lines=lines)
+    except ApiError as e:
+        if e.status_code == 404:
+            console.err("Server not found.")
+            raise typer.Exit(code=2)
+        console.err(f"Failed to fetch logs: {e}")
+        raise typer.Exit(code=2)
+    finally:
+        client.close()
+
+    if json_out:
+        console.print_json(data)
+        return
+
+    logs = data.get("logs") or data.get("raw") or ""
+    console.console.print(logs, markup=False)
 
 
 @app.command("bootstrap")
@@ -1174,8 +1209,14 @@ def bootstrap(
 
     if protocol:
         if not server_ref:
-            console.err("--server is required when using protocol bootstrap.")
-            raise typer.Exit(code=2)
+            cfg = load_config()
+            client = make_client(cfg, profile=None, base_url_override=base_url)
+            try:
+                server_id = select_server(client)
+                server_ref = str(server_id)
+            finally:
+                client.close()
+        # ...
         if any([name, host, note, ssh_target, local]):
             console.err("Server bootstrap flags cannot be combined with protocol bootstrap.")
             raise typer.Exit(code=2)

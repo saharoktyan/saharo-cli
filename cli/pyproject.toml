@@ -18,7 +18,8 @@ dependencies = [
     "cryptography>=42.0.0",
     "httpx>=0.27.0",
     "prompt_toolkit",
-    "pyte"
+    "pyte",
+    "PyYAML>=6.0.1"
 ]
 
 [project.scripts]

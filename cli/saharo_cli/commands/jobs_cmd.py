@@ -11,6 +11,8 @@ from saharo_client.resolve import ResolveError, resolve_server_id_for_jobs
 from .. import console
 from ..config import load_config
 from ..http import make_client
+from ..interactive import select_server, select_agent, select_item
+from questionary import Choice
 
 JOBS_USAGE = """\
 Usage:
@@ -23,7 +25,9 @@ Usage:
 app = typer.Typer(help="Jobs commands.\n\n" + JOBS_USAGE)
 
 
-def _resolve_server_id(client, server_ref: str) -> int:
+def _resolve_server_id(client, server_ref: str | None) -> int:
+    if server_ref is None:
+        return select_server(client)
     try:
         return resolve_server_id_for_jobs(client, server_ref)
     except ResolveError as exc:
@@ -90,13 +94,13 @@ def create_job(
 
     # collect-status -> payload stays empty
 
-    server_id = None
-    if server:
+    if not server and not agent_id:
+        if select_item("Target type", [Choice("Server", "server"), Choice("Agent", "agent")]) == "server":
+            server_id = select_server(client)
+        else:
+            agent_id = select_agent(client)
+    elif server:
         server_id = _resolve_server_id(client, server)
-
-    if not server_id and not agent_id:
-        console.err("Either --server or --agent-id must be provided.")
-        raise typer.Exit(code=2)
 
     if server_id and agent_id:
         console.err("Use either --server or --agent-id, not both.")
@@ -204,13 +208,31 @@ def list_jobs(
 
 
 def _get_job(
-        job_id: int = typer.Argument(...),
+        job_id: int | None = typer.Argument(None),
         base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
         json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
     cfg = load_config()
     client = make_client(cfg, profile=None, base_url_override=base_url)
     try:
+        if job_id is None:
+            # Interactive selection of recent jobs
+            data = client.admin_jobs_list(limit=20)
+            items = data.get("items") if isinstance(data, dict) else []
+            if not items:
+                console.err("No jobs found.")
+                raise typer.Exit(code=2)
+            
+            choices = []
+            for j in items:
+                label = f"ID {j['id']}: {j['type']} ({j['status']}) - {j['created_at']}"
+                choices.append(Choice(title=label, value=str(j["id"])))
+            
+            sel = select_item("Select a job", choices)
+            if not sel:
+                raise typer.Exit(code=1)
+            job_id = int(sel)
+
         data = client.admin_job_get(job_id)
     except ApiError as e:
         if e.status_code == 404:
@@ -234,7 +256,7 @@ def _get_job(
 
 @app.command("get", help="Fetch a job by id.")
 def get_job(
-        job_id: int = typer.Argument(...),
+        job_id: int | None = typer.Argument(None),
         base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
         json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
@@ -243,7 +265,7 @@ def get_job(
 
 @app.command("show", hidden=True)
 def show_job(
-        job_id: int = typer.Argument(...),
+        job_id: int | None = typer.Argument(None),
         base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
         json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):

@@ -16,6 +16,9 @@ from .. import console
 from ..config import load_config, save_config, normalize_base_url
 from ..http import make_client
 from ..keys import load_or_create_awg_keypair, awg_key_dir
+from ..interactive import select_item
+
+from questionary import Choice
 
 app = typer.Typer(help="Fetch VPN client config (server/protocol).")
 
@@ -127,8 +130,8 @@ def _build_awg_uri(*, private_key: str, public_key: str, wg_parts: dict, name: s
 
 @app.command("get")
 def get_config(
-        server: str = typer.Option(..., "--server", help="Server ID or name."),
-        protocol: str = typer.Option(..., "--protocol", help="Protocol (awg, xray, etc)."),
+        server: str | None = typer.Option(None, "--server", help="Server ID or name."),
+        protocol: str | None = typer.Option(None, "--protocol", help="Protocol (awg, xray, etc)."),
         route: str | None = typer.Option(
             None,
             "--route",
@@ -150,11 +153,6 @@ def get_config(
         console.err("Auth token missing. Run `saharo auth login` first.")
         raise typer.Exit(code=2)
 
-    protocol_norm = protocol.strip().lower()
-    if not protocol_norm:
-        console.err("Protocol is required.")
-        raise typer.Exit(code=2)
-
     device_label = (device or _default_device_label()).strip()
     if not device_label:
         console.err("Device label is required.")
@@ -163,7 +161,55 @@ def get_config(
     client = make_client(cfg, profile=None, base_url_override=base_url)
     try:
         me = client.me()
-        access = me.get("access") if isinstance(me, dict) else None
+        access = me.get("access") if isinstance(me, dict) else []
+        if not access:
+            console.err("No servers or protocols are available for your account.")
+            console.info("Please ask your admin to grant you access.")
+            raise typer.Exit(code=2)
+
+        # Smart Selection: Server
+        if not server:
+            server_choices = []
+            for a in access:
+                label = f"{a.get('name') or f'id={a.get('id')}'}"
+                server_choices.append(Choice(title=label, value=str(a.get("id"))))
+            
+            selected_server_id = select_item("Select a server", server_choices)
+            if not selected_server_id:
+                raise typer.Exit(code=1)
+            server = selected_server_id
+
+        # Find the selected server in access data
+        server_entry = None
+        for a in access:
+            if str(a.get("id")) == server or a.get("name") == server:
+                server_entry = a
+                break
+        
+        if not server_entry:
+            console.err(f"Server '{server}' not found in your access list.")
+            raise typer.Exit(code=2)
+
+        # Smart Selection: Protocol
+        if not protocol:
+            available_protocols = server_entry.get("protocols") or []
+            if not available_protocols:
+                console.err(f"No protocols available for server '{server}'.")
+                raise typer.Exit(code=2)
+            
+            proto_choices = []
+            for p in available_protocols:
+                p_key = p.get("key") or p.get("name")
+                p_label = f"{p.get('name') or p_key} ({p.get('status', 'active')})"
+                proto_choices.append(Choice(title=p_label, value=p_key))
+            
+            selected_proto = select_item("Select a protocol", proto_choices)
+            if not selected_proto:
+                raise typer.Exit(code=1)
+            protocol_norm = selected_proto
+        else:
+            protocol_norm = protocol.strip().lower()
+
         server_id, protocol_key = _resolve_access_target(access, server, protocol_norm)
 
         payload = {

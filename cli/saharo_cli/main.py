@@ -13,6 +13,7 @@ from .commands.jobs_cmd import app as jobs_app
 from .commands.logs_cmd import app as logs_app
 from .commands.servers_cmd import app as servers_app
 from .commands.users_cmd import app as users_app
+from .commands.services_cmd import app as services_app
 from .logging_ import setup_logging
 
 
@@ -27,7 +28,7 @@ def _build_app() -> typer.Typer:
 
     # Always available
     app.add_typer(settings_cmd.app, name="settings")
-    app.add_typer(host_app, name="host")
+    app.add_typer(host_app, name="hosts")
     app.add_typer(self_cmd.app, name="self")
     app.add_typer(updates_cmd.app, name="updates")
     app.command("health")(health_cmd.health)
@@ -55,6 +56,7 @@ def _build_app() -> typer.Typer:
             app.add_typer(grants_app, name="grants")
             app.add_typer(logs_app, name="logs")
             app.add_typer(portal_cmd.app, name="portal")
+            app.add_typer(services_app, name="services")
             app.command("invite-admin", hidden=True)(invite_cmd.create_invite)
 
     @app.callback(invoke_without_command=True)

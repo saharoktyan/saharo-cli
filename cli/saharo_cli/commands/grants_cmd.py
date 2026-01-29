@@ -14,6 +14,7 @@ from saharo_client.resolve import (
 from .. import console
 from ..config import load_config
 from ..http import make_client
+from ..interactive import select_user, select_server, select_protocol
 
 app = typer.Typer(help="Grants commands (admin only).")
 
@@ -27,19 +28,9 @@ def _print_candidates(title: str, columns: list[str], rows: list[list[str]]) -> 
     console.console.print(table)
 
 
-def _resolve_protocol(client, protocol: str) -> tuple[int, str | None]:
-    try:
-        return resolve_protocol_for_grants(client, protocol)
-    except ResolveError as exc:
-        console.err(str(exc))
-        if exc.info_label and exc.info_value:
-            console.info(f"{exc.info_label}: {exc.info_value}")
-        if exc.candidates and exc.candidate_headers:
-            _print_candidates("Protocols", exc.candidate_headers, exc.candidates)
-        raise typer.Exit(code=2)
-
-
 def _resolve_user_id(client, user: str | None, user_id: int | None) -> int:
+    if user is None and user_id is None:
+        return select_user(client)
     try:
         return resolve_user_id_for_grants(client, user, user_id)
     except ResolveError as exc:
@@ -50,12 +41,30 @@ def _resolve_user_id(client, user: str | None, user_id: int | None) -> int:
 
 
 def _resolve_server_id(client, server: str | None, server_id: int | None) -> int:
+    if server is None and server_id is None:
+        return select_server(client)
     try:
         return resolve_server_id_for_grants(client, server, server_id)
     except ResolveError as exc:
         console.err(str(exc))
         if exc.candidates and exc.candidate_headers:
             _print_candidates("Servers", exc.candidate_headers, exc.candidates)
+        raise typer.Exit(code=2)
+
+
+def _resolve_protocol(client, server_id: int, protocol: str | None) -> tuple[int, str | None]:
+    if protocol is None:
+        code = select_protocol(client, server_id)
+        id_val, _ = resolve_protocol_for_grants(client, code)
+        return id_val, code
+    try:
+        return resolve_protocol_for_grants(client, protocol)
+    except ResolveError as exc:
+        console.err(str(exc))
+        if exc.info_label and exc.info_value:
+            console.info(f"{exc.info_label}: {exc.info_value}")
+        if exc.candidates and exc.candidate_headers:
+            _print_candidates("Protocols", exc.candidate_headers, exc.candidates)
         raise typer.Exit(code=2)
 
 
@@ -144,7 +153,7 @@ def create_grant(
     try:
         resolved_user_id = _resolve_user_id(client, user, user_id)
         resolved_server_id = _resolve_server_id(client, server, server_id)
-        protocol_id, protocol_code = _resolve_protocol(client, protocol)
+        protocol_id, protocol_code = _resolve_protocol(client, resolved_server_id, protocol)
         resolved_route = _validate_route_for_protocol(protocol_code, route)
         grant = client.admin_grant_create(
             user_id=resolved_user_id,
@@ -166,14 +175,35 @@ def create_grant(
     console.ok(f"Grant {grant.get('id')} created for user {resolved_user_id}.")
 
 
-@app.command("revoke")
-def revoke_grant(
-        grant_id: int = typer.Option(..., "--id", help="Grant ID."),
+@app.command("delete")
+def delete_grant(
+        grant_id: int | None = typer.Option(None, "--id", help="Grant ID."),
         base_url: str | None = typer.Option(None, "--base-url", help="Override API base URL."),
 ):
     cfg = load_config()
     client = make_client(cfg, profile=None, base_url_override=base_url)
     try:
+        if grant_id is None:
+            # For deletion, we could list all grants, but it might be too many.
+            # Usually users delete specific grants. But for unification:
+            data = client.admin_grants_list()
+            items = data.get("items") if isinstance(data, dict) else []
+            if not items:
+                console.err("No grants found.")
+                raise typer.Exit(code=2)
+            
+            from questionary import Choice
+            choices = []
+            for g in items:
+                label = f"ID {g['id']}: User {g['user_id']} -> Server {g['server_id']} ({g['status']})"
+                choices.append(Choice(title=label, value=str(g["id"])))
+            
+            from ..interactive import select_item
+            sel = select_item("Select a grant to delete", choices)
+            if not sel:
+                raise typer.Exit(code=1)
+            grant_id = int(sel)
+
         grant = client.admin_grant_revoke(grant_id)
     except ApiError as e:
         if e.status_code in (401, 403):
