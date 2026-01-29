@@ -288,6 +288,10 @@ class SaharoClient:
         data = self._t.request("GET", path)
         return data if isinstance(data, dict) else {"items": data}
 
+    def admin_host_update(self, *, pull_only: bool = False) -> dict[str, Any]:
+        data = self._t.request("POST", "/admin/host/update", json_body={"pull_only": bool(pull_only)})
+        return data if isinstance(data, dict) else {"raw": data}
+
     def admin_server_create(
             self,
             *,

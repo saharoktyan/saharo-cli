@@ -2243,7 +2243,10 @@ def render_compose(inputs: BootstrapInputs) -> str:
                 "env_file": ["./.env"],
                 "depends_on": {"db": {"condition": "service_healthy"}},
                 "ports": [f"{DEFAULT_API_BIND}:{DEFAULT_API_PORT}:{DEFAULT_API_PORT}"],
-                "volumes": ["./state:/opt/saharo/host/state"],
+                "volumes": [
+                    "./state:/opt/saharo/host/state",
+                    "/var/run/docker.sock:/var/run/docker.sock",
+                ],
                 "healthcheck": {
                     "test": [
                         "CMD-SHELL",
@@ -2290,6 +2293,7 @@ def render_compose(inputs: BootstrapInputs) -> str:
                 f"      - \"{DEFAULT_API_BIND}:{DEFAULT_API_PORT}:{DEFAULT_API_PORT}\"",
                 "    volumes:",
                 "      - ./state:/opt/saharo/host/state",
+                "      - /var/run/docker.sock:/var/run/docker.sock",
                 "    healthcheck:",
                 "      test: [\"CMD-SHELL\", \"python -c \\\"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health').read()\\\"\"]",
                 "      interval: 10s",

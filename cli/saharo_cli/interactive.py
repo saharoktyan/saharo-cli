@@ -181,6 +181,75 @@ def select_item(message: str, choices: list[Choice], *, clear_after: bool = Fals
     return str(result)
 
 
+def _choice_title_text(choice: Choice) -> str:
+    title = choice.title
+    if isinstance(title, list):
+        parts = []
+        for item in title:
+            if isinstance(item, (list, tuple)) and len(item) > 1:
+                parts.append(str(item[1]))
+            else:
+                parts.append(str(item))
+        return "".join(parts)
+    return str(title)
+
+
+def _filter_choices(choices: list[Choice], query: str) -> list[Choice]:
+    q = (query or "").strip().lower()
+    if not q:
+        return choices
+    return [c for c in choices if q in _choice_title_text(c).lower()]
+
+
+def select_item_search(message: str, choices: list[Choice], *, search_prompt: str = "Search") -> str | None:
+    while True:
+        try:
+            query = questionary.text(f"{search_prompt} (blank for all)").ask()
+        except KeyboardInterrupt:
+            _abort_interactive()
+        if query is None:
+            _abort_interactive()
+        filtered = _filter_choices(choices, query)
+        if not filtered:
+            console.err("No matches found. Try again.")
+            continue
+        return select_item(message, filtered)
+
+
+def select_items(message: str, choices: list[Choice], *, clear_after: bool = False) -> list[str]:
+    try:
+        result = questionary.checkbox(
+            message,
+            choices=choices,
+            default=None,
+            use_shortcuts=False,
+            pointer="▶",
+            style=_SELECT_STYLE,
+        ).ask()
+    except KeyboardInterrupt:
+        _abort_interactive()
+    if result is None:
+        _abort_interactive()
+    if clear_after:
+        _clear_prompt(len(choices) + 1)
+    return [str(item) for item in result]
+
+
+def select_items_search(message: str, choices: list[Choice], *, search_prompt: str = "Search") -> list[str]:
+    while True:
+        try:
+            query = questionary.text(f"{search_prompt} (blank for all)").ask()
+        except KeyboardInterrupt:
+            _abort_interactive()
+        if query is None:
+            _abort_interactive()
+        filtered = _filter_choices(choices, query)
+        if not filtered:
+            console.err("No matches found. Try again.")
+            continue
+        return select_items(message, filtered)
+
+
 def persist_telemetry_choice(host_key: str, enabled: bool) -> None:
     cfg = load_config()
     cfg.telemetry[host_key] = enabled

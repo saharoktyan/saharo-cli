@@ -16,7 +16,7 @@ from .. import console
 from ..config import load_config, save_config, normalize_base_url
 from ..http import make_client
 from ..keys import load_or_create_awg_keypair, awg_key_dir
-from ..interactive import select_item
+from ..interactive import select_item, select_item_search
 
 from questionary import Choice
 
@@ -174,7 +174,7 @@ def get_config(
                 label = f"{a.get('name') or f'id={a.get('id')}'}"
                 server_choices.append(Choice(title=label, value=str(a.get("id"))))
             
-            selected_server_id = select_item("Select a server", server_choices)
+            selected_server_id = select_item_search("Select a server", server_choices)
             if not selected_server_id:
                 raise typer.Exit(code=1)
             server = selected_server_id
@@ -203,7 +203,7 @@ def get_config(
                 p_label = f"{p.get('name') or p_key} ({p.get('status', 'active')})"
                 proto_choices.append(Choice(title=p_label, value=p_key))
             
-            selected_proto = select_item("Select a protocol", proto_choices)
+            selected_proto = select_item_search("Select a protocol", proto_choices)
             if not selected_proto:
                 raise typer.Exit(code=1)
             protocol_norm = selected_proto

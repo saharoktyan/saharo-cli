@@ -44,12 +44,13 @@ def create_job(
         job_type: str = typer.Option(
             ...,
             "--type",
-            help="Job type: restart-service, start-service, stop-service, restart-container, collect-status.",
+            help="Job type: restart-service, start-service, stop-service, restart-container, collect-status, update-agent.",
         ),
         server: str | None = typer.Option(None, "--server", help="Server ID or exact name."),
         agent_id: int | None = typer.Option(None, "--agent-id", help="Agent ID (if no server)."),
         service: str | None = typer.Option(None, "--service", help="Service name for *-service jobs."),
         container: str | None = typer.Option(None, "--container", help="Container name for restart-container."),
+        version: str | None = typer.Option(None, "--version", help="Agent version for update-agent jobs."),
         base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
         json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
@@ -72,15 +73,18 @@ def create_job(
         "stop-service": "stop_service",
         "restart-container": "restart_container",
         "collect-status": "collect_status",
+        "update-agent": "agent_update",
     }
     job_key = _normalize_job_type(job_type)
     if job_key not in job_type_map:
         console.err(
-            "Invalid job type. Use restart-service, start-service, stop-service, restart-container, or collect-status."
+            "Invalid job type. Use restart-service, start-service, stop-service, "
+            "restart-container, collect-status, or update-agent."
         )
         raise typer.Exit(code=2)
 
     payload: dict[str, str] = {}
+    server_id = None
     if job_key in {"restart-service", "start-service", "stop-service"}:
         if not service:
             console.err("--service is required for service jobs.")
@@ -91,6 +95,9 @@ def create_job(
             console.err("--container is required for restart-container.")
             raise typer.Exit(code=2)
         payload["container"] = container.strip()
+    elif job_key == "update-agent":
+        if version:
+            payload["target_version"] = version.strip()
 
     # collect-status -> payload stays empty
 
