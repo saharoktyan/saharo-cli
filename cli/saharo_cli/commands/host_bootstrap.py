@@ -4,11 +4,10 @@ import os
 import json
 import logging
 import os
+import ipaddress
 import posixpath
 import re
-import secrets
 import shlex
-import shutil
 import socket
 import subprocess
 import time
@@ -26,13 +25,34 @@ from rich.text import Text
 from .host_https import (
     HttpsSetupError,
     ensure_https,
+    report_https_failure,
+)
+from saharo_client import (
+    BootstrapInputs,
+    DEFAULT_API_BIND,
+    DEFAULT_API_PORT,
+    HostError,
+    LICENSE_STATE_RELATIVE_POSIX,
+    PrereqResult,
+    check_prereqs_local,
+    generate_secret_token,
+    get_existing_jwt_secret as sdk_get_existing_jwt_secret,
     normalize_api_url,
     normalize_domain,
-    report_https_failure,
+    normalize_remote_install_dir,
+    read_env_content as sdk_read_env_content,
+    read_env_file as sdk_read_env_file,
+    render_compose as sdk_render_compose,
+    render_env as sdk_render_env,
+    render_readme as sdk_render_readme,
+    render_vpn_lockdown_script as sdk_render_vpn_lockdown_script,
+    validate_bootstrap_params,
+    validate_ssh_key_path,
+    wipe_host_data_local as sdk_wipe_host_data_local,
+    write_files_local as sdk_write_files_local,
 )
 from .. import console
 from ..license_resolver import (
-    IMAGE_COMPONENTS,
     LicenseEntitlements,
     LicenseEntitlementsError,
     resolve_entitlements,
@@ -57,8 +77,6 @@ _MISSING_MARKER_RE = re.compile(r"field required|type=missing", re.IGNORECASE)
 DEFAULT_INSTALL_DIR = "/opt/saharo"
 DEFAULT_REGISTRY = "registry.saharoktyan.ru"
 DEFAULT_TAG = "1.0.0"
-DEFAULT_API_BIND = "127.0.0.1"
-DEFAULT_API_PORT = 8010
 DEFAULT_HEALTH_TIMEOUT = 60.0
 DEFAULT_HEALTH_INTERVAL = 2.0
 DEFAULT_HEALTH_CURL_TIMEOUT = 5
@@ -66,7 +84,7 @@ DEFAULT_HEALTH_LOG_TAIL = 60
 DEFAULT_API_CONTAINER = "saharo_host_api"
 _TRANSIENT_CURL_EXIT_CODES = {7, 28, 52, 56}
 _LICENSE_STATE_RELATIVE_PATH = Path("state") / "license.json"
-_LICENSE_STATE_RELATIVE_POSIX = posixpath.join("state", "license.json")
+_LICENSE_STATE_RELATIVE_POSIX = LICENSE_STATE_RELATIVE_POSIX
 
 _LAST_PULL_STDERR: str | None = None
 
@@ -86,18 +104,14 @@ def _redact_secret(value: str) -> str:
 
 
 def _generate_secret_token() -> str:
-    return secrets.token_urlsafe(32)
+    return generate_secret_token()
 
 
 def _validate_ssh_key_path(raw_path: str) -> str:
-    path = os.path.expanduser(raw_path.strip())
-    if not path:
-        raise RuntimeError("SSH key path is empty.")
-    if path.endswith(".pub"):
-        raise RuntimeError("SSH key must be a private key, not a .pub file.")
-    if not os.path.exists(path):
-        raise RuntimeError(f"SSH key not found: {path}")
-    return path
+    try:
+        return validate_ssh_key_path(raw_path)
+    except HostError as exc:
+        raise RuntimeError(str(exc)) from exc
 
 
 def _format_auth_header(headers: dict[str, str] | None) -> str:
@@ -180,87 +194,6 @@ def _license_api_request(
     return response
 
 
-@dataclass(frozen=True)
-class BootstrapInputs:
-    api_url: str
-    api_url_original: str | None
-    host_name: str
-    x_root_secret: str
-    db_password: str
-    admin_username: str
-    admin_password: str
-    admin_api_key_name: str
-    jwt_secret: str
-    install_dir: str
-    registry: str
-    lic_url: str
-    tag: str
-    non_interactive: bool
-    assume_yes: bool
-    no_docker_install: bool
-    force: bool
-    telegram_bot_token: str | None = None
-    https_enabled: bool = False
-    https_domain: str | None = None
-    https_email: str | None = None
-    https_http01: bool = True
-    skip_https: bool = False
-
-    @property
-    def host_dir(self) -> Path:
-        return Path(self.install_dir).expanduser().resolve() / "host"
-
-    # Remote paths must stay POSIX to avoid Windows drive letters in SSH commands.
-    @property
-    def host_dir_posix(self) -> str:
-        return posixpath.join(self.install_dir, "host")
-
-    @property
-    def compose_path_posix(self) -> str:
-        return posixpath.join(self.host_dir_posix, "docker-compose.yml")
-
-    @property
-    def env_path_posix(self) -> str:
-        return posixpath.join(self.host_dir_posix, ".env")
-
-    @property
-    def readme_path_posix(self) -> str:
-        return posixpath.join(self.host_dir_posix, "README.txt")
-
-    @property
-    def data_dir_posix(self) -> str:
-        return posixpath.join(self.host_dir_posix, "data", "postgres")
-
-    @property
-    def license_state_path_posix(self) -> str:
-        return posixpath.join(self.host_dir_posix, _LICENSE_STATE_RELATIVE_POSIX)
-
-    @property
-    def compose_path(self) -> Path:
-        return self.host_dir / "docker-compose.yml"
-
-    @property
-    def env_path(self) -> Path:
-        return self.host_dir / ".env"
-
-    @property
-    def readme_path(self) -> Path:
-        return self.host_dir / "README.txt"
-
-    @property
-    def data_dir(self) -> Path:
-        return self.host_dir / "data" / "postgres"
-
-    @property
-    def api_base(self) -> str:
-        return f"http://{DEFAULT_API_BIND}:{DEFAULT_API_PORT}"
-
-
-@dataclass
-class PrereqResult:
-    docker_installed: bool
-    compose_installed: bool
-    docker_running: bool
 
 
 @dataclass(frozen=True)
@@ -349,13 +282,11 @@ def _print_entitlement_versions(entitlements: LicenseEntitlements) -> None:
 
 
 def _normalize_remote_install_dir(install_dir: str) -> str:
-    clean = (install_dir or "").strip()
-    if not clean:
-        return DEFAULT_INSTALL_DIR
-    if looks_like_windows_path(clean):
-        console.err("In SSH mode, --install-dir must be a Linux path like /opt/saharo.")
+    try:
+        return normalize_remote_install_dir(install_dir, default_dir=DEFAULT_INSTALL_DIR)
+    except HostError as exc:
+        console.err(str(exc))
         raise typer.Exit(code=2)
-    return clean
 
 
 def host_bootstrap(
@@ -392,10 +323,20 @@ def host_bootstrap(
             help="Confirm the irreversible wipe (required with --wipe-data in non-interactive mode).",
         ),
         skip_https: bool = typer.Option(False, "--skip-https", help="Skip HTTPS setup entirely."),
+        vpn_cidr: str | None = typer.Option(
+            None,
+            "--vpn-cidr",
+            help="Restrict Host API/web ports to localhost + this VPN CIDR (e.g. 10.8.0.0/24).",
+        ),
         print_versions: bool = typer.Option(
             False,
             "--print-versions",
             help="Resolve versions from license entitlements and exit.",
+        ),
+        enterprise: bool | None = typer.Option(
+            None,
+            "--enterprise/--no-enterprise",
+            help="Enable enterprise mode. If omitted, asked interactively.",
         ),
         non_interactive: bool = typer.Option(False, "--non-interactive", help="Fail if required flags are missing."),
         assume_yes: bool = typer.Option(False, "--yes", help="Assume yes where safe."),
@@ -409,6 +350,7 @@ def host_bootstrap(
         ssh_host: str | None = typer.Option(None, "--ssh-host", help="SSH target in user@host form."),
         ssh_port: int = typer.Option(22, "--ssh-port", help="SSH port."),
         ssh_key: str | None = typer.Option(None, "--ssh-key", help="SSH private key path."),
+        ssh_password: str | None = typer.Option(None, "--ssh-password", help="SSH password (insecure)."),
         ssh_sudo: bool = typer.Option(True, "--ssh-sudo/--no-ssh-sudo",
                                       help="Use sudo over SSH for privileged commands."),
 
@@ -427,6 +369,9 @@ def host_bootstrap(
         except RuntimeError as exc:
             console.err(str(exc))
             raise typer.Exit(code=2)
+    if ssh_password and is_windows():
+        console.err("Password SSH authentication is not supported on Windows. Use --ssh-key.")
+        raise typer.Exit(code=2)
 
     if print_versions and no_license:
         console.err("--print-versions requires license entitlements; remove --no-license.")
@@ -436,7 +381,7 @@ def host_bootstrap(
         console.err("Local host bootstrap is not supported on Windows. Use --ssh-host to connect to a Linux host.")
         raise typer.Exit(code=2)
 
-    ssh_password_override = None
+    ssh_password_override = ssh_password
     if not ssh_host and not non_interactive:
         if is_windows():
             console.info("Local host bootstrap is not supported on Windows.")
@@ -541,6 +486,8 @@ def host_bootstrap(
             entitlements=entitlements,
             wipe_data=wipe_data,
             skip_https=skip_https,
+            vpn_cidr=vpn_cidr,
+            enterprise=enterprise,
         )
         return
 
@@ -570,6 +517,25 @@ def host_bootstrap(
     else:
         resolved_tag = tag
 
+    if non_interactive:
+        try:
+            validate_bootstrap_params(
+                {
+                    "api_url": api_url,
+                    "x_root_secret": x_root_secret,
+                    "db_password": db_password,
+                    "admin_username": admin_username,
+                    "admin_password": admin_password,
+                }
+            )
+        except HostError as exc:
+            console.err(str(exc))
+            raise typer.Exit(code=2)
+
+    existing_db_password = None
+    if force and not wipe_data:
+        existing_db_password = get_existing_db_password(Path(install_dir) / "host")
+
     inputs = collect_inputs(
         api_url=api_url,
         host_name=host_name,
@@ -589,6 +555,9 @@ def host_bootstrap(
         force=force,
         rotate_jwt_secret=rotate_jwt_secret,
         skip_https=skip_https,
+        vpn_cidr=vpn_cidr,
+        enterprise=enterprise,
+        existing_db_password=existing_db_password,
     )
 
     if not non_interactive:
@@ -635,6 +604,7 @@ def host_bootstrap(
     bootstrap_admin(inputs)
     verify_health(inputs)
     https_url = _maybe_setup_https_local(inputs)
+    _maybe_apply_vpn_lockdown_local(inputs)
     print_summary(inputs, public_api_url=https_url)
 
 
@@ -669,6 +639,8 @@ def _host_bootstrap_ssh(
         entitlements: LicenseEntitlements | None,
         wipe_data: bool,
         skip_https: bool,
+        vpn_cidr: str | None,
+        enterprise: bool | None,
 ) -> None:
     install_dir = _normalize_remote_install_dir(install_dir)
 
@@ -754,6 +726,9 @@ def _host_bootstrap_ssh(
             resolved_tag = tag
 
         existing_jwt_secret = _get_existing_jwt_secret_remote(session, install_dir, sudo=use_sudo)
+        existing_db_password = None
+        if force and not wipe_data:
+            existing_db_password = _get_existing_db_password_remote(session, install_dir, sudo=use_sudo)
         inputs = collect_inputs(
             api_url=api_url,
             host_name=host_name,
@@ -773,6 +748,9 @@ def _host_bootstrap_ssh(
             force=force,
             rotate_jwt_secret=rotate_jwt_secret,
             skip_https=skip_https,
+            vpn_cidr=vpn_cidr,
+            enterprise=enterprise,
+            existing_db_password=existing_db_password,
             existing_jwt_secret=existing_jwt_secret,
         )
 
@@ -843,25 +821,17 @@ def _host_bootstrap_ssh(
             ssh_key=ssh_key,
             sudo=use_sudo,
         )
+        _maybe_apply_vpn_lockdown_remote(session, inputs, sudo=use_sudo)
         _print_remote_summary(inputs, ssh_host=ssh_host, public_api_url=https_url)
     finally:
         session.close()
 
 
 def check_prereqs(inputs: BootstrapInputs) -> PrereqResult:
-    docker_installed = _command_exists("docker")
-    compose_installed = False
-    docker_running = False
-    if docker_installed:
-        compose_installed = _command_success(["docker", "compose", "version"])
-        docker_running = _command_success(["docker", "info"])
-    if docker_installed and compose_installed and docker_running:
+    result = check_prereqs_local()
+    if result.docker_installed and result.compose_installed and result.docker_running:
         console.ok("Docker and Docker Compose are available.")
-    return PrereqResult(
-        docker_installed=docker_installed,
-        compose_installed=compose_installed,
-        docker_running=docker_running,
-    )
+    return result
 
 
 def collect_inputs(
@@ -884,8 +854,15 @@ def collect_inputs(
         force: bool,
         rotate_jwt_secret: bool,
         skip_https: bool,
+        vpn_cidr: str | None,
+        enterprise: bool | None,
+        existing_db_password: str | None = None,
         existing_jwt_secret: str | None = None,
 ) -> BootstrapInputs:
+    if not db_password and existing_db_password:
+        db_password = existing_db_password
+        console.info("Reusing existing Postgres password from current host .env.")
+
     missing = []
     if not api_url:
         missing.append("--api-url")
@@ -925,6 +902,7 @@ def collect_inputs(
         admin_username = typer.prompt("Admin username")
     if not admin_password:
         admin_password = typer.prompt("Admin password (input hidden)", hide_input=True, confirmation_prompt=True)
+    vpn_cidr = _normalize_vpn_cidr(vpn_cidr)
     api_url = (api_url or "").strip()
     if not api_url:
         console.err("API URL cannot be empty.")
@@ -968,6 +946,14 @@ def collect_inputs(
             )
             api_url = f"https://{https_domain}"
             api_url_original = api_url_original or api_url
+    if not vpn_cidr and not non_interactive:
+        if confirm_choice("Restrict Host API/web access to a VPN CIDR only?", default=False):
+            vpn_cidr = _normalize_vpn_cidr(
+                typer.prompt("VPN CIDR (example: 10.8.0.0/24)", default="10.8.0.0/24")
+            )
+    enterprise_enabled = bool(enterprise)
+    if enterprise is None and not non_interactive:
+        enterprise_enabled = confirm_choice("Enable enterprise mode?", default=False)
 
     jwt_secret = existing_jwt_secret or get_existing_jwt_secret(Path(install_dir) / "host")
     if rotate_jwt_secret or not jwt_secret:
@@ -994,12 +980,26 @@ def collect_inputs(
         assume_yes=assume_yes,
         no_docker_install=no_docker_install,
         force=force,
+        enterprise_enabled=enterprise_enabled,
         https_enabled=https_enabled,
         https_domain=https_domain,
         https_email=https_email,
         https_http01=https_http01,
         skip_https=skip_https,
+        vpn_cidr=vpn_cidr,
     )
+
+
+def _normalize_vpn_cidr(value: str | None) -> str | None:
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    try:
+        network = ipaddress.ip_network(raw, strict=False)
+    except ValueError:
+        console.err(f"Invalid VPN CIDR: {raw}")
+        raise typer.Exit(code=2)
+    return str(network)
 
 
 def handle_missing_docker(inputs: BootstrapInputs) -> None:
@@ -1138,6 +1138,7 @@ def _remote_write_files(session: SSHSession, inputs: BootstrapInputs, *, sudo: b
     compose_path = inputs.compose_path_posix
     env_path = inputs.env_path_posix
     readme_path = inputs.readme_path_posix
+    vpn_lockdown_script_path = inputs.vpn_lockdown_script_path_posix
     host_q = shlex.quote(host_dir)
     exists_check = _remote_run(session, f"test -d {host_q}", sudo=sudo)
     if exists_check.returncode == 0 and not inputs.force:
@@ -1160,6 +1161,7 @@ def _remote_write_files(session: SSHSession, inputs: BootstrapInputs, *, sudo: b
     compose_content = render_compose(inputs)
     env_content = render_env(inputs, include_root_secret=True)
     readme_content = render_readme(inputs)
+    vpn_lockdown_script_content = render_vpn_lockdown_script(inputs)
 
     res = _remote_run_input(
         session,
@@ -1199,11 +1201,26 @@ def _remote_write_files(session: SSHSession, inputs: BootstrapInputs, *, sudo: b
     if res.returncode != 0:
         console.err(res.stderr.strip() or "Failed to write README.txt.")
         raise typer.Exit(code=2)
+    res = _remote_run_input(
+        session,
+        f"cat > {shlex.quote(vpn_lockdown_script_path)}",
+        vpn_lockdown_script_content,
+        log_label="write apply-vpn-lockdown.sh",
+        sudo=sudo,
+    )
+    if res.returncode != 0:
+        console.err(res.stderr.strip() or "Failed to write apply-vpn-lockdown.sh.")
+        raise typer.Exit(code=2)
+    res = _remote_run(session, f"chmod 700 {shlex.quote(vpn_lockdown_script_path)}", sudo=sudo)
+    if res.returncode != 0:
+        console.err(res.stderr.strip() or "Failed to set apply-vpn-lockdown.sh permissions.")
+        raise typer.Exit(code=2)
 
     console.ok(f"Wrote compose file to {compose_path}")
     console.ok(f"Wrote env file to {env_path}")
     console.ok(f"Ensured data dir at {data_dir}")
     console.ok(f"Wrote README to {readme_path}")
+    console.ok(f"Wrote VPN lockdown script to {vpn_lockdown_script_path}")
 
 
 def _remote_backup_host_dir(
@@ -1549,7 +1566,7 @@ def _remote_http_post_json(
         script = "\n".join(
             [
                 "python3 - <<'PY'",
-                "import json, sys, urllib.request",
+                "import json, sys, urllib.error, urllib.request",
                 f"url = {url_literal}",
                 f"payload = {payload_literal}",
                 f"headers = {headers_literal}",
@@ -1561,6 +1578,11 @@ def _remote_http_post_json(
                 "        sys.stdout.write(body)",
                 "        sys.stdout.write('\\n')",
                 "        sys.stdout.write(str(r.status))",
+                "except urllib.error.HTTPError as exc:",
+                "    body = exc.read().decode('utf-8', errors='ignore')",
+                "    sys.stdout.write(body)",
+                "    sys.stdout.write('\\n')",
+                "    sys.stdout.write(str(exc.code))",
                 "except Exception as exc:",
                 "    sys.stderr.write(str(exc))",
                 "    sys.exit(1)",
@@ -1587,6 +1609,42 @@ def _print_remote_summary(inputs: BootstrapInputs, *, ssh_host: str, public_api_
     console.print(f"Public api-url: {api_url}")
     console.print(f"Login from another machine: saharo auth login --url {api_url} ...")
     console.print(f"View logs: docker compose -f {inputs.compose_path_posix} logs -f api")
+    if inputs.vpn_cidr:
+        console.print(f"VPN lockdown CIDR: {inputs.vpn_cidr}")
+        console.print(
+            f"Re-apply lockdown: sudo sh {inputs.vpn_lockdown_script_path_posix} {inputs.vpn_cidr}"
+        )
+
+
+def _maybe_apply_vpn_lockdown_local(inputs: BootstrapInputs) -> None:
+    if not inputs.vpn_cidr:
+        return
+    script_path = str(inputs.vpn_lockdown_script_path)
+    console.info(f"Applying VPN lockdown (CIDR: {inputs.vpn_cidr})...")
+    if os.geteuid() == 0:
+        cmd = ["sh", script_path, inputs.vpn_cidr]
+    else:
+        cmd = ["sudo", "sh", script_path, inputs.vpn_cidr]
+    res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if res.returncode != 0:
+        err = (res.stderr or "").strip() or (res.stdout or "").strip() or "unknown error"
+        console.err(f"Failed to apply VPN lockdown: {err}")
+        raise typer.Exit(code=2)
+    console.ok("VPN lockdown applied.")
+
+
+def _maybe_apply_vpn_lockdown_remote(session: SSHSession, inputs: BootstrapInputs, *, sudo: bool) -> None:
+    if not inputs.vpn_cidr:
+        return
+    script_path = shlex.quote(inputs.vpn_lockdown_script_path_posix)
+    cidr = shlex.quote(inputs.vpn_cidr)
+    console.info(f"Applying VPN lockdown on remote host (CIDR: {inputs.vpn_cidr})...")
+    res = _remote_run(session, f"sh {script_path} {cidr}", sudo=sudo)
+    if res.returncode != 0:
+        err = (res.stderr or "").strip() or "unknown error"
+        console.err(f"Failed to apply remote VPN lockdown: {err}")
+        raise typer.Exit(code=2)
+    console.ok("Remote VPN lockdown applied.")
 
 
 def _maybe_setup_https_local(inputs: BootstrapInputs) -> str | None:
@@ -1872,6 +1930,18 @@ def _get_existing_jwt_secret_remote(
     return jwt_secret.strip() if jwt_secret else None
 
 
+def _get_existing_db_password_remote(
+        session: SSHSession, install_dir: str, *, sudo: bool
+) -> str | None:
+    env_path = posixpath.join(install_dir, "host", ".env")
+    res = _remote_run(session, f"cat {shlex.quote(env_path)}", sudo=sudo)
+    if res.returncode != 0:
+        return None
+    env = read_env_content(res.stdout or "")
+    password = env.get("POSTGRES_PASSWORD")
+    return password.strip() if password else None
+
+
 @contextmanager
 def _remote_temporary_root_secret(
         session: SSHSession, inputs: BootstrapInputs, *, sudo: bool
@@ -1946,34 +2016,22 @@ def _remote_verify_root_secret_env(
 
 
 def write_files(inputs: BootstrapInputs) -> None:
-    host_dir = inputs.host_dir
-    if host_dir.exists() and not inputs.force:
-        console.err(f"Install dir already exists: {host_dir}. Use --force to overwrite.")
+    try:
+        info = sdk_write_files_local(inputs)
+    except HostError as exc:
+        console.err(str(exc))
         raise typer.Exit(code=2)
-    if host_dir.exists() and inputs.force:
-        backup_path = backup_host_dir(host_dir)
-        if backup_path:
-            console.warn(f"Backed up existing host config to {backup_path}")
-
-    host_dir.mkdir(parents=True, exist_ok=True)
-    inputs.data_dir.mkdir(parents=True, exist_ok=True)
-
-    compose_content = render_compose(inputs)
-    env_content = render_env(inputs, include_root_secret=True)
-    readme_content = render_readme(inputs)
-
-    inputs.compose_path.write_text(compose_content, encoding="utf-8")
-    inputs.env_path.write_text(env_content, encoding="utf-8")
-    os.chmod(inputs.env_path, 0o600)
 
     _validate_compose_local(inputs)
 
-    inputs.readme_path.write_text(readme_content, encoding="utf-8")
-
-    console.ok(f"Wrote compose file to {inputs.compose_path}")
-    console.ok(f"Wrote env file to {inputs.env_path}")
-    console.ok(f"Ensured data dir at {inputs.data_dir}")
-    console.ok(f"Wrote README to {inputs.readme_path}")
+    if info.get("backup_path"):
+        console.warn(f"Backed up existing host config to {info['backup_path']}")
+    console.ok(f"Wrote compose file to {info['compose_path']}")
+    console.ok(f"Wrote env file to {info['env_path']}")
+    console.ok(f"Ensured data dir at {info['data_dir']}")
+    console.ok(f"Wrote README to {info['readme_path']}")
+    if info.get("vpn_lockdown_script_path"):
+        console.ok(f"Wrote VPN lockdown script to {info['vpn_lockdown_script_path']}")
 
 
 def _ensure_wipe_confirmed(
@@ -2002,22 +2060,17 @@ def _ensure_wipe_confirmed(
 
 
 def wipe_host_data(inputs: BootstrapInputs) -> None:
-    data_dir = inputs.data_dir
     console.warn("Wiping host data (irreversible).")
-    console.info(f"Deleting data directory: {data_dir}")
-    if inputs.compose_path.exists():
-        console.info("Stopping containers before data wipe...")
-        try:
-            res = _run_compose(inputs, ["down"], check=False, capture_output=True)
-        except FileNotFoundError:
-            res = None
-        if res and res.returncode != 0:
-            console.warn((res.stderr or "").strip() or "Failed to stop containers before wipe.")
-    if data_dir.exists():
-        shutil.rmtree(data_dir)
-        console.ok(f"Deleted {data_dir}")
+    console.info(f"Deleting data directory: {inputs.data_dir}")
+    try:
+        wiped = sdk_wipe_host_data_local(inputs)
+    except HostError as exc:
+        console.err(str(exc))
+        raise typer.Exit(code=2)
+    if wiped:
+        console.ok(f"Deleted {inputs.data_dir}")
     else:
-        console.warn(f"No data directory found at {data_dir}")
+        console.warn(f"No data directory found at {inputs.data_dir}")
 
 
 def _remote_wipe_host_data(session: SSHSession, inputs: BootstrapInputs, *, sudo: bool) -> None:
@@ -2210,191 +2263,47 @@ def print_summary(inputs: BootstrapInputs, public_api_url: str | None = None) ->
     console.print(
         f"View logs: docker compose -f {inputs.compose_path} logs -f api"
     )
+    if inputs.vpn_cidr:
+        console.print(f"VPN lockdown CIDR: {inputs.vpn_cidr}")
+        console.print(
+            f"Re-apply lockdown: sudo sh {inputs.vpn_lockdown_script_path} {inputs.vpn_cidr}"
+        )
 
 
 def render_compose(inputs: BootstrapInputs) -> str:
-    api_image = f"{inputs.registry}/saharo/v1/{IMAGE_COMPONENTS['host']}:{inputs.tag}"
-    compose = {
-        "services": {
-            "db": {
-                "image": "postgres:16-alpine",
-                "container_name": "saharo_host_db",
-                "restart": "unless-stopped",
-                "environment": {
-                    "POSTGRES_DB": "${POSTGRES_DB}",
-                    "POSTGRES_USER": "${POSTGRES_USER}",
-                    "POSTGRES_PASSWORD": "${POSTGRES_PASSWORD}",
-                },
-                "volumes": ["./data/postgres:/var/lib/postgresql/data"],
-                "healthcheck": {
-                    "test": [
-                        "CMD-SHELL",
-                        "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}",
-                    ],
-                    "interval": "10s",
-                    "timeout": "5s",
-                    "retries": 5,
-                },
-            },
-            "api": {
-                "image": api_image,
-                "container_name": "saharo_host_api",
-                "restart": "unless-stopped",
-                "env_file": ["./.env"],
-                "depends_on": {"db": {"condition": "service_healthy"}},
-                "ports": [f"{DEFAULT_API_BIND}:{DEFAULT_API_PORT}:{DEFAULT_API_PORT}"],
-                "volumes": [
-                    "./state:/opt/saharo/host/state",
-                    "/var/run/docker.sock:/var/run/docker.sock",
-                ],
-                "healthcheck": {
-                    "test": [
-                        "CMD-SHELL",
-                        "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health').read()\"",
-                    ],
-                    "interval": "10s",
-                    "timeout": "5s",
-                    "retries": 5,
-                },
-            },
-        }
-    }
-    try:
-        import yaml
-    except Exception:
-        return "\n".join(
-            [
-                "services:",
-                "  db:",
-                "    image: postgres:16-alpine",
-                "    container_name: saharo_host_db",
-                "    restart: unless-stopped",
-                "    environment:",
-                "      POSTGRES_DB: ${POSTGRES_DB}",
-                "      POSTGRES_USER: ${POSTGRES_USER}",
-                "      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}",
-                "    volumes:",
-                "      - ./data/postgres:/var/lib/postgresql/data",
-                "    healthcheck:",
-                "      test: [\"CMD-SHELL\", \"pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}\"]",
-                "      interval: 10s",
-                "      timeout: 5s",
-                "      retries: 5",
-                "  api:",
-                f"    image: {api_image}",
-                "    container_name: saharo_host_api",
-                "    restart: unless-stopped",
-                "    env_file:",
-                "      - ./.env",
-                "    depends_on:",
-                "      db:",
-                "        condition: service_healthy",
-                "    ports:",
-                f"      - \"{DEFAULT_API_BIND}:{DEFAULT_API_PORT}:{DEFAULT_API_PORT}\"",
-                "    volumes:",
-                "      - ./state:/opt/saharo/host/state",
-                "      - /var/run/docker.sock:/var/run/docker.sock",
-                "    healthcheck:",
-                "      test: [\"CMD-SHELL\", \"python -c \\\"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health').read()\\\"\"]",
-                "      interval: 10s",
-                "      timeout: 5s",
-                "      retries: 5",
-            ]
-        ) + "\n"
-    dumped = yaml.safe_dump(compose, sort_keys=False, default_flow_style=False)
-    return dumped if dumped.endswith("\n") else dumped + "\n"
+    return sdk_render_compose(inputs)
 
 
 def render_env(inputs: BootstrapInputs, *, include_root_secret: bool) -> str:
-    database_url = f"postgresql://{_url_encode('saharo')}:{_url_encode(inputs.db_password)}@db:5432/saharo"
-    lines = [
-        f"APP_VERSION={inputs.tag}",
-        f"HOST_NAME={inputs.host_name}",
-        "ENV=prod",
-        "LOG_LEVEL=info",
-        "POSTGRES_DB=saharo",
-        "POSTGRES_USER=saharo",
-        f"POSTGRES_PASSWORD={inputs.db_password}",
-        f"DATABASE_URL={database_url}",
-        "DB_POOL_MIN=1",
-        "DB_POOL_MAX=5",
-        "CORS_ALLOW_ORIGINS=" + inputs.api_url,
-        "CORS_ALLOW_CREDENTIALS=true",
-        f"JWT_SECRET={inputs.jwt_secret}",
-        f"LICENSE_API_URL={inputs.lic_url}",
-        "TELEMETRY_REPORT_INTERVAL_HOURS=1",
-    ]
-    if inputs.telegram_bot_token:
-        lines.append(f"TELEGRAM_BOT_TOKEN={inputs.telegram_bot_token}")
-    if include_root_secret:
-        lines.append(f"ROOT_ADMIN_SECRET={inputs.x_root_secret}")
-    return "\n".join(lines) + "\n"
+    return sdk_render_env(inputs, include_root_secret=include_root_secret)
 
 
 def render_readme(inputs: BootstrapInputs) -> str:
-    return "\n".join(
-        [
-            "Saharo Host (API + Postgres)",
-            "",
-            "Manage services:",
-            f"  docker compose -f {inputs.compose_path} ps",
-            f"  docker compose -f {inputs.compose_path} logs -f api",
-            f"  docker compose -f {inputs.compose_path} restart api",
-            "",
-            "Stop services:",
-            f"  docker compose -f {inputs.compose_path} down",
-            "",
-            "Start services:",
-            f"  docker compose -f {inputs.compose_path} up -d",
-        ]
-    ) + "\n"
+    return sdk_render_readme(inputs)
+
+
+def render_vpn_lockdown_script(inputs: BootstrapInputs) -> str:
+    return sdk_render_vpn_lockdown_script(inputs)
 
 
 def read_env_file(path: Path) -> dict[str, str]:
-    if not path.exists():
-        return {}
-    return read_env_content(path.read_text(encoding="utf-8"))
+    return sdk_read_env_file(path)
 
 
 def read_env_content(content: str) -> dict[str, str]:
-    data: dict[str, str] = {}
-    for raw in content.splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[len("export "):].strip()
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        data[key.strip()] = value.strip()
-    return data
+    return sdk_read_env_content(content)
 
 
 def get_existing_jwt_secret(host_dir: Path) -> str | None:
+    return sdk_get_existing_jwt_secret(host_dir)
+
+
+def get_existing_db_password(host_dir: Path) -> str | None:
     env_path = host_dir / ".env"
     env = read_env_file(env_path)
-    jwt_secret = env.get("JWT_SECRET")
-    return jwt_secret.strip() if jwt_secret else None
+    password = env.get("POSTGRES_PASSWORD")
+    return password.strip() if password else None
 
-
-def backup_host_dir(host_dir: Path) -> Path | None:
-    if not host_dir.exists():
-        return None
-    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    backup_path = host_dir.with_name(f"{host_dir.name}.bak-{timestamp}")
-    moved_any = False
-    data_dir = host_dir / "data"
-    backup_path.mkdir(parents=False, exist_ok=False)
-    for entry in host_dir.iterdir():
-        if entry == data_dir:
-            continue
-        shutil.move(str(entry), str(backup_path / entry.name))
-        moved_any = True
-    if not moved_any:
-        backup_path.rmdir()
-        return None
-    return backup_path
 
 
 def _diagnose_unreachable(inputs: BootstrapInputs) -> None:
@@ -2601,16 +2510,6 @@ def docker_login_ssh(
     raise typer.Exit(code=2)
 
 
-def _command_exists(cmd: str) -> bool:
-    return shutil.which(cmd) is not None
-
-
-def _command_success(cmd: list[str]) -> bool:
-    try:
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except subprocess.CalledProcessError:
-        return False
-    return True
 
 
 def _check_tcp(host: str, port: int, timeout: float) -> bool:
@@ -2632,8 +2531,6 @@ def _generate_jwt_secret() -> str:
     return os.urandom(32).hex()
 
 
-def _url_encode(value: str) -> str:
-    return urllib.parse.quote(value, safe="")
 
 
 @contextmanager
