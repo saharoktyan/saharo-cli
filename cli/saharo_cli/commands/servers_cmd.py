@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import math
 import os
 import posixpath
 import shlex
@@ -20,6 +19,11 @@ from saharo_client.registry import (
 )
 from saharo_client.polling import wait_for_server_heartbeat
 from saharo_client.resolve import ResolveError, find_server_by_name, resolve_server_id_for_servers
+from saharo_client.servers import detach_server_runtime as sdk_detach_server_runtime
+from saharo_client.servers import fetch_server_logs as sdk_fetch_server_logs
+from saharo_client.servers import get_server_status as sdk_get_server_status
+from saharo_client.servers import get_server_with_protocols as sdk_get_server_with_protocols
+from saharo_client.servers import list_servers_page, resolve_server_id
 
 from ..interactive import confirm_choice, fetch_portal_licenses, select_license, select_item, select_server, select_protocol
 from questionary import Choice
@@ -58,6 +62,7 @@ PROTOCOL_SERVICE_MAP = {
 
 DEFAULT_AGENT_HEARTBEAT_INTERVAL_S = 30
 DEFAULT_AGENT_POLL_INTERVAL_S = 10
+DEFAULT_AGENT_LOOP_INTERVAL_S = 10
 
 
 def _validate_ssh_key_path(raw_path: str) -> str:
@@ -107,8 +112,7 @@ def _render_agent_env(
         registry_username: str,
         registry_password: str,
         agent_version: str,
-        heartbeat_interval_s: int,
-        poll_interval_s: int,
+        loop_interval_s: int,
         force_reregister: bool,
 ) -> str:
     lines = [
@@ -118,8 +122,7 @@ def _render_agent_env(
         f"REGISTRY_USERNAME={registry_username}",
         f"REGISTRY_PASSWORD={registry_password}",
         f"AGENT_VERSION={agent_version}",
-        f"AGENT_HEARTBEAT_INTERVAL_S={heartbeat_interval_s}",
-        f"AGENT_POLL_INTERVAL_S={poll_interval_s}",
+        f"AGENT_LOOP_INTERVAL_S={loop_interval_s}",
     ]
     if force_reregister:
         lines.append("SAHARO_AGENT_FORCE_REREGISTER=1")
@@ -643,6 +646,13 @@ def _create_bootstrap_invite(
         if e.status_code in (401, 403):
             console.err("Unauthorized. Admin access is required.")
             raise typer.Exit(code=2)
+        if e.status_code == 404:
+            console.err(
+                "Failed to create bootstrap invite: Host API does not expose agent invite endpoint "
+                "(/admin/agent-invites)."
+            )
+            console.err("Host API/CLI versions are incompatible. Upgrade Host API or use a compatible CLI build.")
+            raise typer.Exit(code=2)
         console.err(f"Failed to create bootstrap invite: {e}")
         raise typer.Exit(code=2)
     finally:
@@ -750,33 +760,28 @@ def list_servers(
         base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
         json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
-    if page < 1:
-        console.err("--page must be >= 1.")
-        raise typer.Exit(code=2)
-    if page_size < 1:
-        console.err("--page-size must be >= 1.")
-        raise typer.Exit(code=2)
-    offset = (page - 1) * page_size
-
     cfg = load_config()
     client = make_client(cfg, profile=None, base_url_override=base_url)
     try:
-        data = client.admin_servers_list(q=q, limit=page_size, offset=offset)
+        page_data = list_servers_page(client, q=q, page=page, page_size=page_size)
     except ApiError as e:
         if e.status_code in (401, 403):
             console.err("Unauthorized. Admin access is required.")
             raise typer.Exit(code=2)
         console.err(f"Failed to list servers: {e}")
         raise typer.Exit(code=2)
+    except ValueError as e:
+        console.err(str(e))
+        raise typer.Exit(code=2)
     finally:
         client.close()
 
     if json_out:
-        console.print_json(data)
+        console.print_json(page_data.raw)
         return
 
-    items = data.get("items") if isinstance(data, dict) else []
-    total = data.get("total") if isinstance(data, dict) else None
+    items = page_data.items
+    total = page_data.total
 
     table = Table(title="Servers")
     table.add_column("id", style="bold")
@@ -800,7 +805,7 @@ def list_servers(
 
     console.console.print(table)
     if total is not None:
-        pages = max(1, math.ceil(total / page_size))
+        pages = page_data.pages or 1
         console.info(f"page={page}/{pages} total={total}")
 
 
@@ -857,9 +862,7 @@ def _show_server_impl(
     cfg = load_config()
     client = make_client(cfg, profile=None, base_url_override=base_url)
     try:
-        server_id = _resolve_server_id(client, server_ref)
-        data = client.admin_server_get(server_id)
-        protocols = client.admin_server_protocols_list(server_id)
+        data, protocols = sdk_get_server_with_protocols(client, server_ref or "")
     except ApiError as e:
         if e.status_code == 404:
             console.err(f"Server '{server_ref}' not found.")
@@ -868,6 +871,9 @@ def _show_server_impl(
             console.err("Unauthorized. Admin access is required.")
             raise typer.Exit(code=2)
         console.err(f"Failed to fetch server: {e}")
+        raise typer.Exit(code=2)
+    except ValueError as e:
+        console.err(str(e))
         raise typer.Exit(code=2)
     finally:
         client.close()
@@ -918,8 +924,7 @@ def server_status(
     cfg = load_config()
     client = make_client(cfg, profile=None, base_url_override=base_url)
     try:
-        server_id = _resolve_server_id(client, server_ref)
-        data = client.admin_server_status(server_id)
+        data = sdk_get_server_status(client, server_ref or "")
     except ApiError as e:
         if e.status_code == 404:
             console.err(f"Server '{server_ref}' not found.")
@@ -928,6 +933,9 @@ def server_status(
             console.err("Unauthorized. Admin access is required.")
             raise typer.Exit(code=2)
         console.err(f"Failed to fetch server status: {e}")
+        raise typer.Exit(code=2)
+    except ValueError as e:
+        console.err(str(e))
         raise typer.Exit(code=2)
     finally:
         client.close()
@@ -1041,8 +1049,7 @@ def _detach_server_impl(
     cfg = load_config()
     client = make_client(cfg, profile=None, base_url_override=base_url)
     try:
-        server_id = _resolve_server_id(client, server_ref)
-        data = client.admin_server_detach_agent(server_id)
+        server_id, data = sdk_detach_server_runtime(client, server_ref or "")
     except ApiError as e:
         if e.status_code == 404:
             console.err(f"Server '{server_ref}' not found.")
@@ -1051,6 +1058,9 @@ def _detach_server_impl(
             console.err("Unauthorized. Admin access is required.")
             raise typer.Exit(code=2)
         console.err(f"Failed to detach server runtime: {e}")
+        raise typer.Exit(code=2)
+    except ValueError as e:
+        console.err(str(e))
         raise typer.Exit(code=2)
     finally:
         client.close()
@@ -1082,40 +1092,133 @@ def detach_server_agent(
 @app.command("delete")
 def delete_server(
         server_ref: str | None = typer.Argument(None, help="Server ID or exact name."),
-        force: bool = typer.Option(False, "--force", help="Detach runtime before deleting the server."),
+        force: bool = typer.Option(True, "--force/--no-force", help="Proceed even if server is attached to agent."),
+        purge: bool = typer.Option(False, "--purge", help="Use destructive remote purge instead of uninstall."),
+        wait: bool = typer.Option(True, "--wait/--no-wait", help="Wait for uninstall job to complete."),
+        wait_timeout: int = typer.Option(900, "--wait-timeout", help="Max seconds to wait for uninstall job."),
+        wait_interval: int = typer.Option(5, "--wait-interval", help="Polling interval for uninstall job."),
+        delete_agent_record: bool = typer.Option(
+            True,
+            "--delete-agent-record/--keep-agent-record",
+            help="Delete agent record in Host API after uninstall.",
+        ),
+        yes: bool = typer.Option(False, "--yes", help="Skip confirmation prompt."),
+        base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
+        json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
+):
+    console.info("`servers delete` is deprecated. Use `servers uninstall`.")
+    uninstall_server(
+        server_ref=server_ref,
+        force=force,
+        purge=purge,
+        wait=wait,
+        wait_timeout=wait_timeout,
+        wait_interval=wait_interval,
+        delete_agent_record=delete_agent_record,
+        yes=yes,
+        base_url=base_url,
+        json_out=json_out,
+    )
+
+
+@app.command("uninstall")
+def uninstall_server(
+        server_ref: str | None = typer.Argument(None, help="Server ID or exact name."),
+        force: bool = typer.Option(True, "--force/--no-force", help="Proceed even if server is attached to agent."),
+        purge: bool = typer.Option(False, "--purge", help="Use destructive remote purge instead of uninstall."),
+        wait: bool = typer.Option(True, "--wait/--no-wait", help="Wait for uninstall job to complete."),
+        wait_timeout: int = typer.Option(900, "--wait-timeout", help="Max seconds to wait for uninstall job."),
+        wait_interval: int = typer.Option(5, "--wait-interval", help="Polling interval for uninstall job."),
+        delete_agent_record: bool = typer.Option(
+            True,
+            "--delete-agent-record/--keep-agent-record",
+            help="Delete agent record in Host API after uninstall.",
+        ),
         yes: bool = typer.Option(False, "--yes", help="Skip confirmation prompt."),
         base_url: str | None = typer.Option(None, "--base-url", help="Override base URL."),
         json_out: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ):
     cfg = load_config()
     client = make_client(cfg, profile=None, base_url_override=base_url)
+    result: dict[str, object] = {"ok": False}
     try:
-        server_id = _resolve_server_id(client, server_ref)
+        server_id = resolve_server_id(client, server_ref or "")
+        server = client.admin_server_get(server_id)
+        agent_id = server.get("agent_id") if isinstance(server, dict) else None
         if not yes:
-            confirmed = typer.confirm(f"Delete server {server_id}?", default=False)
+            action_label = "purge+remove" if purge else "uninstall+remove"
+            target = f"server {server_id}" + (f" and agent {agent_id}" if agent_id else "")
+            confirmed = typer.confirm(f"Run {action_label} for {target}?", default=False)
             if not confirmed:
                 console.info("Aborted.")
                 raise typer.Exit(code=0)
-        data = client.admin_server_delete(server_id, force=force)
+
+        job_data: dict[str, object] | None = None
+        job_id: int | None = None
+        job_status: str | None = None
+        if agent_id:
+            if purge:
+                job_data = client.admin_agent_purge(int(agent_id), force=force, dry_run=False)
+            else:
+                job_data = client.admin_agent_uninstall(int(agent_id), force=force, dry_run=False)
+            if isinstance(job_data, dict) and job_data.get("job_id") is not None:
+                job_id = int(job_data.get("job_id"))  # type: ignore[arg-type]
+            if wait and job_id is not None:
+                job_result = _wait_job(client, job_id, timeout_s=wait_timeout, interval_s=wait_interval)
+                job_status = str(job_result.get("status") or "")
+                if job_status != "succeeded":
+                    raise RuntimeError(f"Agent cleanup job {job_id} finished with status={job_status or 'unknown'}")
+
+        server_delete = client.admin_server_delete(server_id, force=True)
+
+        agent_delete: dict[str, object] | None = None
+        if agent_id and delete_agent_record and (not wait or job_status == "succeeded"):
+            try:
+                agent_delete = client.admin_agent_delete(int(agent_id), force=True)
+            except ApiError as exc:
+                if exc.status_code != 404:
+                    raise
+
+        result = {
+            "ok": True,
+            "server_id": int(server_id),
+            "agent_id": int(agent_id) if agent_id else None,
+            "job": job_data,
+            "job_id": job_id,
+            "job_status": job_status,
+            "server_delete": server_delete,
+            "agent_delete": agent_delete,
+            "purge": bool(purge),
+        }
     except ApiError as e:
         if e.status_code == 404:
             console.err(f"Server '{server_ref}' not found.")
             raise typer.Exit(code=2)
         if e.status_code == 409:
-            console.err("Server is attached to a runtime. Detach it first or use --force.")
+            console.err("Server/agent is attached. Re-run with --force.")
             raise typer.Exit(code=2)
         if e.status_code in (401, 403):
             console.err("Unauthorized. Admin access is required.")
             raise typer.Exit(code=2)
-        console.err(f"Failed to delete server: {e}")
+        console.err(f"Failed to uninstall server: {e}")
+        raise typer.Exit(code=2)
+    except ValueError as e:
+        console.err(str(e))
+        raise typer.Exit(code=2)
+    except RuntimeError as e:
+        console.err(str(e))
         raise typer.Exit(code=2)
     finally:
         client.close()
 
     if json_out:
-        console.print_json(data)
+        console.print_json(result)
         return
-    console.ok(f"Deleted server {server_id}.")
+    console.ok(f"Uninstalled server {result.get('server_id')}.")
+    if result.get("job_id"):
+        console.info(f"Agent cleanup job: {result.get('job_id')} status={result.get('job_status') or 'queued'}")
+    if result.get("agent_id") and delete_agent_record:
+        console.info(f"Agent record removed: {result.get('agent_id')}")
 
 
 @app.command("logs")
@@ -1129,13 +1232,15 @@ def server_logs(
     cfg = load_config()
     client = make_client(cfg, profile=None, base_url_override=base_url)
     try:
-        server_id = _resolve_server_id(client, server_ref)
-        data = client.admin_server_logs(server_id, lines=lines)
+        data = sdk_fetch_server_logs(client, server_ref or "", lines=lines)
     except ApiError as e:
         if e.status_code == 404:
             console.err("Server not found.")
             raise typer.Exit(code=2)
         console.err(f"Failed to fetch logs: {e}")
+        raise typer.Exit(code=2)
+    except ValueError as e:
+        console.err(str(e))
         raise typer.Exit(code=2)
     finally:
         client.close()
@@ -1161,23 +1266,30 @@ def bootstrap(
         port: int = typer.Option(22, "--port", help="SSH port."),
         key: str | None = typer.Option(None, "--key", help="SSH private key path."),
         password: bool = typer.Option(False, "--password", help="Prompt for SSH password."),
+        ssh_password: str | None = typer.Option(None, "--ssh-password", hidden=True),
         sudo: bool = typer.Option(False, "--sudo", help="Use sudo -n for privileged commands."),
         sudo_password: bool = typer.Option(False, "--sudo-password", help="Prompt for sudo password."),
+        sudo_password_value: str | None = typer.Option(None, "--sudo-password-value", hidden=True),
         no_remote_login: bool = typer.Option(False, "--no-remote-login", help="Skip docker login on the remote host."),
         with_docker: bool = typer.Option(False, "--with-docker", help="Bootstrap Docker if missing."),
         dry_run: bool = typer.Option(False, "--dry-run", help="Print actions without executing."),
         api_url: str | None = typer.Option(None, "--api-url", help="Override API base URL for the runtime."),
         force_reregister: bool = typer.Option(False, "--force-reregister",
                                               help="Force re-register even if state exists."),
-        heartbeat_interval_s: int = typer.Option(
-            DEFAULT_AGENT_HEARTBEAT_INTERVAL_S,
-            "--heartbeat-interval",
-            help="Agent heartbeat interval in seconds.",
+        agent_interval_s: int = typer.Option(
+            DEFAULT_AGENT_LOOP_INTERVAL_S,
+            "--agent-interval",
+            help="Agent loop interval in seconds (heartbeat + job claim in one tick).",
         ),
-        poll_interval_s: int = typer.Option(
-            DEFAULT_AGENT_POLL_INTERVAL_S,
+        legacy_heartbeat_interval_s: int | None = typer.Option(
+            None,
+            "--heartbeat-interval",
+            hidden=True,
+        ),
+        legacy_poll_interval_s: int | None = typer.Option(
+            None,
             "--poll-interval",
-            help="Agent job poll interval in seconds.",
+            hidden=True,
         ),
         force: bool = typer.Option(False, "--force", help="Legacy: reinstall protocol even if container exists."),
         register_timeout: int = typer.Option(agents_cmd.REGISTRATION_TIMEOUT_S, "--register-timeout",
@@ -1206,6 +1318,18 @@ def bootstrap(
     """
     ssh_password_value = None
     sudo_password_value = None
+
+    if ssh_password:
+        ssh_password_value = ssh_password
+        if is_windows():
+            console.err(
+                "Password SSH authentication is not supported on Windows. "
+                "Use --key or run from Linux/macOS."
+            )
+            raise typer.Exit(code=2)
+        password = False
+    if sudo_password_value:
+        sudo_password = False
 
     if protocol:
         if not server_ref:
@@ -1268,7 +1392,8 @@ def bootstrap(
     if not local and use_wizard:
         port = typer.prompt("SSH port", default=port)
     if not local:
-        if not key and not password:
+        has_ssh_password = bool(ssh_password_value)
+        if not key and not password and not has_ssh_password:
             if confirm_choice("Use an SSH private key for authentication?", default=True):
                 key_input = typer.prompt(
                     "SSH private key path",
@@ -1293,7 +1418,7 @@ def bootstrap(
                 console.err("Sudo privileges are required to install the agent.")
                 raise typer.Exit(code=2)
             sudo = True
-        if sudo and not dry_run and not sudo_password:
+        if sudo and not dry_run and not sudo_password and not sudo_password_value:
             sudo_password_value = typer.prompt(
                 "Sudo password (input hidden, leave blank if none)",
                 default="",
@@ -1308,26 +1433,22 @@ def bootstrap(
         name = typer.prompt("Server name")
     if not host:
         host = typer.prompt("Server host (IP or DNS)")
-    if heartbeat_interval_s <= 0:
-        console.err("--heartbeat-interval must be a positive integer.")
-        raise typer.Exit(code=2)
-    if poll_interval_s <= 0:
-        console.err("--poll-interval must be a positive integer.")
+    if legacy_heartbeat_interval_s is not None and legacy_heartbeat_interval_s > 0:
+        agent_interval_s = legacy_heartbeat_interval_s
+        console.info("`--heartbeat-interval` is deprecated. Use `--agent-interval`.")
+    if legacy_poll_interval_s is not None and legacy_poll_interval_s > 0:
+        agent_interval_s = legacy_poll_interval_s
+        console.info("`--poll-interval` is deprecated. Use `--agent-interval`.")
+    if agent_interval_s <= 0:
+        console.err("--agent-interval must be a positive integer.")
         raise typer.Exit(code=2)
     if use_wizard:
-        heartbeat_interval_s = typer.prompt(
-            "Agent heartbeat interval (seconds)",
-            default=DEFAULT_AGENT_HEARTBEAT_INTERVAL_S,
+        agent_interval_s = typer.prompt(
+            "Agent loop interval (seconds)",
+            default=DEFAULT_AGENT_LOOP_INTERVAL_S,
         )
-        poll_interval_s = typer.prompt(
-            "Agent job poll interval (seconds)",
-            default=DEFAULT_AGENT_POLL_INTERVAL_S,
-        )
-        if heartbeat_interval_s <= 0:
-            console.err("Heartbeat interval must be a positive integer.")
-            raise typer.Exit(code=2)
-        if poll_interval_s <= 0:
-            console.err("Poll interval must be a positive integer.")
+        if agent_interval_s <= 0:
+            console.err("Agent loop interval must be a positive integer.")
             raise typer.Exit(code=2)
     if register_timeout <= 0:
         console.err("--register-timeout must be a positive integer.")
@@ -1341,13 +1462,6 @@ def bootstrap(
 
     cfg = load_config()
     effective_base_url = normalize_base_url(base_url or cfg.base_url, warn=True)
-    invite_token = _create_bootstrap_invite(
-        cfg=cfg,
-        name=name,
-        note=note,
-        expires_minutes=invite_expires_minutes,
-        base_url_override=base_url,
-    )
 
     if agent_version:
         resolved_tag = agent_version
@@ -1380,6 +1494,13 @@ def bootstrap(
                 deployed = True
 
         if agent_id is None:
+            invite_token = _create_bootstrap_invite(
+                cfg=cfg,
+                name=name,
+                note=note,
+                expires_minutes=invite_expires_minutes,
+                base_url_override=base_url,
+            )
             agents_cmd._cleanup_agent_installation_local(allow_existing_state=False, label="bootstrap")
             env_path = f"{compose_dir}/.env"
             registry_url, registry_username, registry_password = _require_registry_activation(
@@ -1396,8 +1517,7 @@ def bootstrap(
                 registry_username=registry_username,
                 registry_password=registry_password,
                 agent_version=resolved_tag,
-                heartbeat_interval_s=heartbeat_interval_s,
-                poll_interval_s=poll_interval_s,
+                loop_interval_s=agent_interval_s,
                 force_reregister=force_reregister,
             )
             with open(env_path, "w", encoding="utf-8") as f:
@@ -1477,6 +1597,14 @@ def bootstrap(
                     deployed = True
 
             if agent_id is None:
+                agents_cmd._check_remote_api_health(session, agent_api_url, sudo=sudo)
+                invite_token = _create_bootstrap_invite(
+                    cfg=cfg,
+                    name=name,
+                    note=note,
+                    expires_minutes=invite_expires_minutes,
+                    base_url_override=base_url,
+                )
                 if with_docker:
                     res = session.run("command -v docker >/dev/null 2>&1 || echo missing")
                     if res.returncode != 0:
@@ -1541,8 +1669,7 @@ def bootstrap(
                     registry_username=registry_username,
                     registry_password=registry_password,
                     agent_version=resolved_tag,
-                    heartbeat_interval_s=heartbeat_interval_s,
-                    poll_interval_s=poll_interval_s,
+                    loop_interval_s=agent_interval_s,
                     force_reregister=force_reregister,
                 )
                 if sudo:
@@ -1576,7 +1703,6 @@ def bootstrap(
                     console.err(res.stderr.strip() or "Failed to write README.txt.")
                     raise typer.Exit(code=2)
 
-                agents_cmd._check_remote_api_health(session, agent_api_url, sudo=sudo)
                 agents_cmd._cleanup_agent_installation(session, sudo=sudo, allow_existing_state=False,
                                                        label="bootstrap")
 

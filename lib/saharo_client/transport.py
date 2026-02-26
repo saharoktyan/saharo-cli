@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from typing import Any
 
 import httpx
@@ -30,9 +31,19 @@ class Transport:
     def close(self) -> None:
         self._client.close()
 
-    def request(self, method: str, path: str, *, json_body: Any | None = None) -> Any:
+    def request(
+            self,
+            method: str,
+            path: str,
+            *,
+            json_body: Any | None = None,
+            headers: dict[str, str] | None = None,
+    ) -> Any:
+        req_headers: dict[str, str] = {"X-Request-Id": uuid.uuid4().hex}
+        if headers:
+            req_headers.update(headers)
         try:
-            r = self._client.request(method, path, json=json_body)
+            r = self._client.request(method, path, json=json_body, headers=req_headers)
         except httpx.RequestError as e:
             raise NetworkError(str(e)) from e
 

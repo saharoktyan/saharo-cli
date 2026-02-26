@@ -173,7 +173,28 @@ class SaharoClient:
         body: dict[str, Any] = {"name": name, "note": note}
         if expires_minutes is not None:
             body["ttl_seconds"] = int(expires_minutes) * 60
-        data = self._t.request("POST", "/admin/agent-invites", json_body=body)
+        paths = [
+            "/admin/agent-invites",
+            "/admin/agents/invites",  # legacy compatibility fallback
+        ]
+        last_not_found: ApiError | None = None
+        data: Any = None
+        for path in paths:
+            try:
+                data = self._t.request("POST", path, json_body=body)
+                last_not_found = None
+                break
+            except ApiError as exc:
+                if exc.status_code == 404:
+                    last_not_found = exc
+                    continue
+                raise
+        if last_not_found is not None:
+            raise ApiError(
+                404,
+                "Agent invite endpoint is missing on Host API. Upgrade Host API or use a compatible CLI version.",
+                last_not_found.details,
+            )
         return data if isinstance(data, dict) else {"raw": data}
 
     def admin_agent_delete(self, agent_id: int, *, force: bool = False) -> dict[str, Any]:
@@ -287,6 +308,10 @@ class SaharoClient:
         path = "/admin/jobs" + (f"?{query}" if query else "")
         data = self._t.request("GET", path)
         return data if isinstance(data, dict) else {"items": data}
+
+    def admin_host_update(self, *, pull_only: bool = False) -> dict[str, Any]:
+        data = self._t.request("POST", "/admin/host/update", json_body={"pull_only": bool(pull_only)})
+        return data if isinstance(data, dict) else {"raw": data}
 
     def admin_server_create(
             self,
@@ -540,3 +565,157 @@ class SaharoClient:
     def admin_agent_custom_services(self, agent_id: int) -> list[dict[str, Any]]:
         data = self._t.request("GET", f"/admin/custom-services/agents/{int(agent_id)}/services")
         return data if isinstance(data, list) else (data.get("items") if isinstance(data, dict) else [])
+
+    def admin_custom_service_revisions(self, service_id: int, *, limit: int = 50) -> list[dict[str, Any]]:
+        query = urlencode({"limit": int(limit)})
+        data = self._t.request("GET", f"/admin/custom-services/{int(service_id)}/revisions?{query}")
+        return data if isinstance(data, list) else (data.get("items") if isinstance(data, dict) else [])
+
+    def admin_custom_service_rollback(self, service_id: int, *, revision: int, note: str | None = None) -> dict[str, Any]:
+        body: dict[str, Any] = {"revision": int(revision)}
+        if note:
+            body["note"] = note
+        data = self._t.request("POST", f"/admin/custom-services/{int(service_id)}/rollback", json_body=body)
+        return data if isinstance(data, dict) else {"raw": data}
+
+    def admin_server_desired_custom_services_get(self, server_id: int) -> dict[str, Any]:
+        data = self._t.request("GET", f"/admin/custom-services/servers/{int(server_id)}/desired-services")
+        return data if isinstance(data, dict) else {"raw": data}
+
+    def admin_server_known_custom_services_get(self, server_id: int) -> dict[str, Any]:
+        data = self._t.request("GET", f"/admin/custom-services/servers/{int(server_id)}/known-services")
+        return data if isinstance(data, dict) else {"raw": data}
+
+    def admin_server_known_custom_services_set(
+            self,
+            server_id: int,
+            *,
+            service_codes: list[str],
+            append: bool = False,
+    ) -> dict[str, Any]:
+        body = {
+            "service_codes": service_codes,
+            "append": bool(append),
+        }
+        data = self._t.request(
+            "PUT",
+            f"/admin/custom-services/servers/{int(server_id)}/known-services",
+            json_body=body,
+        )
+        return data if isinstance(data, dict) else {"raw": data}
+
+    def admin_server_desired_custom_services_set(
+            self,
+            server_id: int,
+            *,
+            service_codes: list[str],
+            enqueue_reconcile: bool = True,
+            rollout_strategy: str = "safe",
+            rollout_batch_size: int = 1,
+            rollout_max_unavailable: int = 1,
+            rollout_pause_seconds: float = 0.0,
+    ) -> dict[str, Any]:
+        body = {
+            "service_codes": service_codes,
+            "enqueue_reconcile": bool(enqueue_reconcile),
+            "rollout_strategy": rollout_strategy,
+            "rollout_batch_size": int(rollout_batch_size),
+            "rollout_max_unavailable": int(rollout_max_unavailable),
+            "rollout_pause_seconds": float(rollout_pause_seconds),
+        }
+        data = self._t.request(
+            "PUT",
+            f"/admin/custom-services/servers/{int(server_id)}/desired-services",
+            json_body=body,
+        )
+        return data if isinstance(data, dict) else {"raw": data}
+
+    def admin_server_custom_services_dry_run(
+            self,
+            server_id: int,
+            *,
+            rollout_strategy: str = "safe",
+            rollout_batch_size: int | None = None,
+            rollout_max_unavailable: int | None = None,
+            rollout_pause_seconds: float | None = None,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {"rollout_strategy": rollout_strategy}
+        if rollout_batch_size is not None:
+            body["rollout_batch_size"] = int(rollout_batch_size)
+        if rollout_max_unavailable is not None:
+            body["rollout_max_unavailable"] = int(rollout_max_unavailable)
+        if rollout_pause_seconds is not None:
+            body["rollout_pause_seconds"] = float(rollout_pause_seconds)
+        data = self._t.request(
+            "POST",
+            f"/admin/custom-services/servers/{int(server_id)}/desired-services/dry-run",
+            json_body=body,
+        )
+        return data if isinstance(data, dict) else {"raw": data}
+
+    def admin_server_custom_services_reconcile_now(
+            self,
+            server_id: int,
+            *,
+            rollout_strategy: str = "safe",
+            rollout_batch_size: int = 1,
+            rollout_max_unavailable: int = 1,
+            rollout_pause_seconds: float = 0.0,
+    ) -> dict[str, Any]:
+        body = {
+            "rollout_strategy": rollout_strategy,
+            "rollout_batch_size": int(rollout_batch_size),
+            "rollout_max_unavailable": int(rollout_max_unavailable),
+            "rollout_pause_seconds": float(rollout_pause_seconds),
+        }
+        data = self._t.request(
+            "POST",
+            f"/admin/custom-services/servers/{int(server_id)}/reconcile-now",
+            json_body=body,
+        )
+        return data if isinstance(data, dict) else {"raw": data}
+
+    def admin_server_custom_services_drift(self, server_id: int) -> dict[str, Any]:
+        data = self._t.request("GET", f"/admin/custom-services/servers/{int(server_id)}/drift")
+        return data if isinstance(data, dict) else {"raw": data}
+
+    def admin_custom_services_events(
+            self,
+            *,
+            limit: int = 200,
+            service_code: str | None = None,
+            server_id: int | None = None,
+            event_type: str | None = None,
+    ) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {"limit": int(limit)}
+        if service_code:
+            params["service_code"] = service_code
+        if server_id is not None:
+            params["server_id"] = int(server_id)
+        if event_type:
+            params["event_type"] = event_type
+        query = urlencode(params) if params else ""
+        path = "/admin/custom-services/stream/events" + (f"?{query}" if query else "")
+        data = self._t.request("GET", path)
+        return data if isinstance(data, list) else (data.get("items") if isinstance(data, dict) else [])
+
+    def admin_custom_services_state_export(self) -> dict[str, Any]:
+        data = self._t.request("GET", "/admin/custom-services/state/export")
+        return data if isinstance(data, dict) else {"raw": data}
+
+    def admin_custom_services_state_import(
+            self,
+            *,
+            services: list[dict[str, Any]],
+            revisions: list[dict[str, Any]],
+            instances: list[dict[str, Any]],
+            merge: bool = True,
+    ) -> dict[str, Any]:
+        body = {
+            "services": services,
+            "revisions": revisions,
+            "instances": instances,
+            "merge": bool(merge),
+        }
+        data = self._t.request("POST", "/admin/custom-services/state/import", json_body=body)
+        return data if isinstance(data, dict) else {"raw": data}

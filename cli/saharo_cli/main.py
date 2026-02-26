@@ -6,6 +6,7 @@ import typer
 
 from .auth_state import resolve_auth_context
 from .commands import auth_cmd, config_cmd, invite_cmd, settings_cmd, health_cmd, self_cmd, updates_cmd, portal_cmd
+from .tui_app import run_tui
 from .commands.grants_cmd import app as grants_app
 from .commands.health_cmd import app as health_app
 from .commands.host_cmd import app as host_app
@@ -31,6 +32,7 @@ def _build_app() -> typer.Typer:
     app.add_typer(host_app, name="hosts")
     app.add_typer(self_cmd.app, name="self")
     app.add_typer(updates_cmd.app, name="updates")
+    app.command("tui")(lambda: run_tui())
     app.command("health")(health_cmd.health)
     app.add_typer(invite_cmd.app_user, name="invite", hidden=True)
 
@@ -47,6 +49,8 @@ def _build_app() -> typer.Typer:
 
         # Health is available to all authenticated users
         app.add_typer(health_app, name="")
+        if ctx.role in {"admin", "operator", "viewer"} or ctx.state in {"token_present", "token_unverified"}:
+            app.add_typer(services_app, name="services")
 
         # Admin-only apps (also allow when auth cannot be verified yet)
         if ctx.role == "admin" or ctx.state in {"token_present", "token_unverified"}:
@@ -56,7 +60,6 @@ def _build_app() -> typer.Typer:
             app.add_typer(grants_app, name="grants")
             app.add_typer(logs_app, name="logs")
             app.add_typer(portal_cmd.app, name="portal")
-            app.add_typer(services_app, name="services")
             app.command("invite-admin", hidden=True)(invite_cmd.create_invite)
 
     @app.callback(invoke_without_command=True)

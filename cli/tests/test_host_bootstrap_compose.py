@@ -55,6 +55,33 @@ def test_render_compose_indentation_and_config(tmp_path) -> None:
     assert res.returncode == 0, res.stderr
 
 
+def test_render_compose_includes_enterprise_service(tmp_path) -> None:
+    inputs = BootstrapInputs(
+        api_url="https://example.com",
+        api_url_original=None,
+        host_name="Host API",
+        x_root_secret="root-secret",
+        db_password="db-pass",
+        admin_username="admin",
+        admin_password="admin-pass",
+        admin_api_key_name="admin-key",
+        jwt_secret="jwt-secret",
+        install_dir=str(tmp_path),
+        registry="registry.saharoktyan.ru",
+        lic_url="https://lic.example.com",
+        tag="1.2.3",
+        non_interactive=True,
+        assume_yes=True,
+        no_docker_install=True,
+        force=True,
+        enterprise_enabled=True,
+    )
+    compose_content = render_compose(inputs)
+    assert "enterprise-policy" in compose_content
+    assert "saharo_enterprise_policy" in compose_content
+    assert "registry.saharoktyan.ru/saharo/v1/enterprise-policy:1.2.3" in compose_content
+
+
 def test_render_env_includes_root_admin_secret(tmp_path) -> None:
     inputs = BootstrapInputs(
         api_url="https://example.com",
@@ -77,3 +104,54 @@ def test_render_env_includes_root_admin_secret(tmp_path) -> None:
     )
     env_content = render_env(inputs, include_root_secret=True)
     assert "ROOT_ADMIN_SECRET=root-secret" in env_content
+
+
+def test_render_env_includes_vpn_lockdown_flags(tmp_path) -> None:
+    inputs = BootstrapInputs(
+        api_url="https://example.com",
+        api_url_original=None,
+        host_name="Host API",
+        x_root_secret="root-secret",
+        db_password="db-pass",
+        admin_username="admin",
+        admin_password="admin-pass",
+        admin_api_key_name="admin-key",
+        jwt_secret="jwt-secret",
+        install_dir=str(tmp_path),
+        registry="registry.example.com",
+        lic_url="https://lic.example.com",
+        tag="1.2.3",
+        non_interactive=True,
+        assume_yes=True,
+        no_docker_install=True,
+        force=True,
+        vpn_cidr="10.8.0.0/24",
+    )
+    env_content = render_env(inputs, include_root_secret=False)
+    assert "VPN_CIDR=10.8.0.0/24" in env_content
+    assert "VPN_LOCKDOWN_ENABLED=true" in env_content
+
+
+def test_render_env_includes_enterprise_toggle(tmp_path) -> None:
+    inputs = BootstrapInputs(
+        api_url="https://example.com",
+        api_url_original=None,
+        host_name="Host API",
+        x_root_secret="root-secret",
+        db_password="db-pass",
+        admin_username="admin",
+        admin_password="admin-pass",
+        admin_api_key_name="admin-key",
+        jwt_secret="jwt-secret",
+        install_dir=str(tmp_path),
+        registry="registry.example.com",
+        lic_url="https://lic.example.com",
+        tag="1.2.3",
+        non_interactive=True,
+        assume_yes=True,
+        no_docker_install=True,
+        force=True,
+        enterprise_enabled=True,
+    )
+    env_content = render_env(inputs, include_root_secret=False)
+    assert "ENTERPRISE_ENABLED=true" in env_content

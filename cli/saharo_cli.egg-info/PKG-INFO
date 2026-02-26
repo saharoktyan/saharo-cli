@@ -2,6 +2,11 @@ Metadata-Version: 2.4
 Name: saharo-cli
 Version: 0.1.0
 Summary: Saharo CLI
+License: Apache-2.0
+Classifier: License :: OSI Approved :: Apache Software License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3 :: Only
+Classifier: Programming Language :: Python :: 3.11
 Requires-Python: >=3.11
 Description-Content-Type: text/markdown
 Requires-Dist: typer>=0.12.3
@@ -13,7 +18,9 @@ Requires-Dist: saharo-client @ file:./lib
 Requires-Dist: cryptography>=42.0.0
 Requires-Dist: httpx>=0.27.0
 Requires-Dist: prompt_toolkit
+Requires-Dist: textual>=0.70.0
 Requires-Dist: pyte
+Requires-Dist: PyYAML>=6.0.1
 
 # Saharo
 
@@ -159,6 +166,27 @@ saharo servers status
 Inspect a job
 
 saharo jobs get <job_id>
+
+Custom service orchestration
+
+```bash
+# create or update service from YAML
+saharo services apply ./my-service.yaml
+
+# set desired services and enqueue reconcile
+saharo services desired-set <server-id> svc-a svc-b --strategy rolling --batch-size 1
+
+# preview before apply
+saharo services dry-run <server-id> --strategy rolling --json
+
+# run reconcile now
+saharo services reconcile <server-id> --strategy recreate
+
+# observe runtime state
+saharo services drift <server-id>
+saharo services events --limit 100
+saharo services revisions <service-code>
+```
 
 View host logs (on the host server)
 

@@ -19,7 +19,7 @@ Usage:
   saharo jobs get <id>
   saharo jobs list [--status STATUS] [--server ID|NAME] [--agent-id ID]
   saharo jobs create --type <type> [--server ID|NAME | --agent-id ID] [--service NAME | --container NAME]
-  saharo jobs clear [--older-than DAYS] [--status finished|failed|claimed|queued] [--dry-run] [--yes]
+  saharo jobs clear [--older-than DAYS] [--status finished|failed|claimed|queued|running|succeeded|cancelled] [--dry-run] [--yes]
 """
 
 app = typer.Typer(help="Jobs commands.\n\n" + JOBS_USAGE)
@@ -290,7 +290,7 @@ def clear_jobs(
         status: str | None = typer.Option(
             None,
             "--status",
-            help="Status filter: finished, failed, claimed, queued.",
+            help="Status filter: finished, failed, claimed, queued, running, succeeded, cancelled.",
         ),
         server_id: int | None = typer.Option(None, "--server-id", help="Filter by server ID."),
         agent_id: int | None = typer.Option(None, "--agent-id", help="Filter by agent ID."),

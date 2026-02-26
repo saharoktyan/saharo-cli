@@ -380,8 +380,10 @@ def install_agent(
         port: int = typer.Option(22, "--port", help="SSH port."),
         key: str | None = typer.Option(None, "--key", help="SSH private key path."),
         password: bool = typer.Option(False, "--password", help="Prompt for SSH password."),
+        ssh_password: str | None = typer.Option(None, "--ssh-password", hidden=True),
         sudo: bool = typer.Option(False, "--sudo", help="Use sudo -n for privileged commands."),
         sudo_password: bool = typer.Option(False, "--sudo-password", help="Prompt for sudo password."),
+        sudo_password_value: str | None = typer.Option(None, "--sudo-password-value", hidden=True),
         with_docker: bool = typer.Option(False, "--with-docker", help="Bootstrap Docker if missing."),
         dry_run: bool = typer.Option(False, "--dry-run", help="Print actions without executing."),
         invite: str = typer.Option(..., "--invite", help="Invite token."),
@@ -454,7 +456,15 @@ def install_agent(
         resolved_tag = tag
 
     pwd = None
-    if password:
+    if ssh_password:
+        if is_windows():
+            console.err(
+                "Password SSH authentication is not supported on Windows. "
+                "Use --key or run from Linux/macOS."
+            )
+            raise typer.Exit(code=2)
+        pwd = ssh_password
+    elif password:
         if is_windows():
             console.err(
                 "Password SSH authentication is not supported on Windows. "
@@ -466,7 +476,9 @@ def install_agent(
         else:
             pwd = typer.prompt("SSH password (input hidden)", hide_input=True)
     sudo_pwd = None
-    if sudo_password and not dry_run:
+    if sudo_password_value:
+        sudo_pwd = sudo_password_value if not dry_run else None
+    elif sudo_password and not dry_run:
         sudo_pwd = typer.prompt("Sudo password (input hidden)", hide_input=True)
 
     if local:
@@ -763,7 +775,7 @@ def _check_remote_api_health(session: SSHSession, api_url: str, *, sudo: bool) -
     if res.returncode != 0:
         console.err(
             "Remote host cannot reach API health endpoint. "
-            "Ensure the API URL is reachable from the remote host and try again."
+            "Ensure the API URL is reachable from the remote host (VPN route/CIDR/firewall) and try again."
         )
         raise typer.Exit(code=2)
 
@@ -773,7 +785,7 @@ def _check_local_api_health(api_url: str) -> None:
     if res.returncode != 0:
         console.err(
             "Local host cannot reach API health endpoint. "
-            "Ensure the API URL is reachable and try again."
+            "Ensure the API URL is reachable (VPN route/CIDR/firewall) and try again."
         )
         raise typer.Exit(code=2)
 

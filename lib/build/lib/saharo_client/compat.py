@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from .semver import is_version_in_range
@@ -27,3 +28,7 @@ def evaluate_compatibility(
         "api_version": api_version or None,
         "reasons": reasons,
     }
+
+
+def is_windows() -> bool:
+    return os.name == "nt"

@@ -2,6 +2,11 @@ Metadata-Version: 2.4
 Name: saharo-client
 Version: 0.1.0
 Summary: Saharo API client SDK (used by CLI and later by bot)
+License: Apache-2.0
+Classifier: License :: OSI Approved :: Apache Software License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3 :: Only
+Classifier: Programming Language :: Python :: 3.11
 Requires-Python: >=3.11
 Description-Content-Type: text/markdown
 Requires-Dist: httpx>=0.27.0

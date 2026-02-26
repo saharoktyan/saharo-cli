@@ -2,11 +2,17 @@ from __future__ import annotations
 
 import sys
 
-from .interactive_menu import run_interactive_menu
-from .main import app
-
 
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "tui":
+        from .tui_app import run_tui
+
+        run_tui()
+        return
+
+    from .interactive_menu import run_interactive_menu
+    from .main import app
+
     if len(sys.argv) == 1:
         tokens = run_interactive_menu(app)
         if not tokens:

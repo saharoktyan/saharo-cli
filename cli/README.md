@@ -143,6 +143,40 @@ Inspect a job
 
 saharo jobs get <job_id>
 
+Custom service orchestration
+
+```bash
+# create or update service from YAML
+saharo services apply ./my-service.yaml
+
+# set desired services with explicit replicas and enqueue reconcile
+saharo services desired-state set <server-id> svc-a=2 svc-b
+saharo services ds set <server-id> svc-a=2 svc-b
+
+# merge/append desired services without replacing the whole set
+saharo services desired-state add <server-id> svc-c=3
+saharo services ds add <server-id> svc-c=3
+
+# remove services from desired-state
+saharo services desired-state rm <server-id> svc-b
+saharo services ds rm <server-id> svc-b
+
+# update replicas for already desired services
+saharo services desired-state scale <server-id> svc-a=1
+saharo services ds scale <server-id> svc-a=1
+
+# preview before apply
+saharo services dry-run <server-id> --strategy rolling --json
+
+# run reconcile now
+saharo services reconcile <server-id> --strategy recreate
+
+# observe runtime state
+saharo services drift <server-id>
+saharo services events --limit 100
+saharo services revisions <service-code>
+```
+
 View host logs (on the host server)
 
 docker compose -f /opt/saharo/host/docker-compose.yml logs -f api

@@ -20,6 +20,7 @@ saharo_cli/path_utils.py
 saharo_cli/registry_store.py
 saharo_cli/semver.py
 saharo_cli/ssh.py
+saharo_cli/tui_app.py
 saharo_cli.egg-info/PKG-INFO
 saharo_cli.egg-info/SOURCES.txt
 saharo_cli.egg-info/dependency_links.txt
@@ -62,6 +63,7 @@ tests/test_license_resolver.py
 tests/test_logs_agent_lookup.py
 tests/test_path_utils.py
 tests/test_servers_create_bootstrap.py
+tests/test_services_commands.py
 tests/test_settings_commands.py
 tests/test_ssh.py
 tests/test_whoami_command.py

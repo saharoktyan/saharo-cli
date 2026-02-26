@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-import ipaddress
 import os
 import re
 import shlex
 import subprocess
 import sys
-import urllib.parse
 from dataclasses import dataclass
 
 import typer
+
+from saharo_client import HostError, HttpsContext, ensure_https as sdk_ensure_https, normalize_domain
 
 from .. import console
 from ..ssh import SSHSession, SshTarget, build_control_path, is_windows
@@ -95,32 +95,6 @@ class ExecContext:
 app = typer.Typer(help="HTTPS setup commands.")
 
 
-def normalize_domain(raw: str) -> str:
-    value = (raw or "").strip()
-    if not value:
-        raise ValueError("Domain cannot be empty.")
-    if "://" not in value:
-        value = f"http://{value}"
-    parsed = urllib.parse.urlparse(value)
-    host = parsed.hostname or ""
-    if not host:
-        raise ValueError("Invalid domain or URL.")
-    return host
-
-
-def normalize_api_url(raw: str) -> str:
-    value = (raw or "").strip()
-    if not value:
-        raise ValueError("API URL cannot be empty.")
-    parsed = urllib.parse.urlparse(value)
-    if parsed.scheme:
-        if not parsed.netloc:
-            raise ValueError("Invalid API URL.")
-        return value
-    domain = normalize_domain(value)
-    return f"http://{domain}"
-
-
 def _sudo_requirement_message(ctx: ExecContext) -> str:
     if ctx.session:
         return "HTTPS setup requires root or --ssh-sudo to install nginx/certbot and write /etc/nginx."
@@ -168,42 +142,22 @@ def ensure_https(
         ssh_session: SSHSession | None = None,
         allow_sudo: bool = False,
 ) -> None:
-    clean_domain = normalize_domain(domain)
-    if "@" not in (email or ""):
-        raise ValueError("Email must include '@'.")
-    is_root = _detect_is_root(ssh_session)
-    resolved_allow_sudo = ssh_session.target.sudo if ssh_session else allow_sudo
-    ctx = ExecContext(session=ssh_session, allow_sudo=resolved_allow_sudo, is_root=is_root)
-    _ensure_sudo_ready(ctx)
-
-    if _https_already_configured(ctx, clean_domain):
-        console.ok("HTTPS already configured; skipping.")
-        return
-
-    console.info("Checking DNS resolution...")
-    _check_dns(ctx, clean_domain, http01=http01)
-
-    console.info("Ensuring required packages are installed...")
-    _ensure_apt_available(ctx)
-    _install_packages(ctx)
-
-    console.info("Writing Nginx configuration...")
-    _write_nginx_config(ctx, clean_domain, api_port)
-    _enable_nginx_site(ctx)
-    _run_checked(ctx, "nginx -t", label="nginx config test", sudo=ctx.needs_sudo)
-    _run_checked(ctx, "systemctl reload nginx", label="reload nginx", sudo=ctx.needs_sudo)
-
-    console.info("Checking ports 80/443...")
-    _check_ports(ctx)
-
-    console.info("Requesting Let's Encrypt certificate...")
-    _run_certbot(ctx, clean_domain, email, http01=http01)
-
-    console.info("Verifying HTTPS health endpoint...")
-    _verify_https_health(ctx, clean_domain)
-
-    console.ok("HTTPS setup completed.")
-    console.info("Renewal is handled automatically by the certbot systemd timer.")
+    try:
+        clean_domain = normalize_domain(domain)
+        is_root = _detect_is_root(ssh_session)
+        resolved_allow_sudo = ssh_session.target.sudo if ssh_session else allow_sudo
+        ctx = HttpsContext(
+            run=lambda cmd, sudo=False: _remote_run(ssh_session, cmd, sudo=sudo) if ssh_session else _run_local(cmd, sudo=sudo),
+            run_input=lambda cmd, content, sudo=False: _remote_run_input(ssh_session, cmd, content, log_label="", sudo=sudo)
+            if ssh_session
+            else _run_local_input(cmd, content, sudo=sudo),
+            allow_sudo=resolved_allow_sudo,
+            is_root=is_root,
+            remote=bool(ssh_session),
+        )
+        sdk_ensure_https(clean_domain, email, api_port, http01=http01, ctx=ctx)
+    except HostError as exc:
+        raise HttpsSetupError(str(exc)) from exc
 
 
 @app.command("setup")
@@ -235,7 +189,11 @@ def https_setup(
         console.err("Local HTTPS setup is not supported on Windows. Use --ssh-host or run from Linux/macOS.")
         raise typer.Exit(code=2)
 
-    clean_domain = normalize_domain(domain)
+    try:
+        clean_domain = normalize_domain(domain)
+    except HostError as exc:
+        console.err(str(exc))
+        raise typer.Exit(code=2)
 
     if ssh_host:
         _https_setup_remote(

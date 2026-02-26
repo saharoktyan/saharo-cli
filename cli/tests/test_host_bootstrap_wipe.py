@@ -6,6 +6,7 @@ from saharo_cli.commands.host_bootstrap import (
     BootstrapInputs,
     _ensure_wipe_confirmed,
     bootstrap_admin,
+    get_existing_db_password,
 )
 
 
@@ -55,3 +56,10 @@ def test_wipe_requires_confirm_in_non_interactive(tmp_path) -> None:
             confirm_wipe=False,
         )
     assert exc.value.exit_code == 2
+
+
+def test_get_existing_db_password_reads_env(tmp_path) -> None:
+    host_dir = tmp_path / "host"
+    host_dir.mkdir(parents=True, exist_ok=True)
+    (host_dir / ".env").write_text("POSTGRES_PASSWORD=keep-me\n", encoding="utf-8")
+    assert get_existing_db_password(host_dir) == "keep-me"
