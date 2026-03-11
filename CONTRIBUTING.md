@@ -10,16 +10,17 @@ Thanks for considering contributing to Saharo CLI.
 
 ### Development
 
-The CLI is a Python 3.11+ project.
+The maintained CLI is Rust-based.
 
-Common commands (from `saharo-cli/cli/`):
+Common commands (from `saharo-cli/rust-cli/`):
 
 ```bash
-python -m compileall -q .
-pytest -q
+cargo check
+cargo test
 ```
+
+Deprecated Python CLI and Python SDK live under `deprecated/` and are no longer the main development target.
 
 ### Security
 
 If you found a security issue, see `SECURITY.md`.
-

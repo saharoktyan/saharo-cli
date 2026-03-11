@@ -3,12 +3,19 @@
 Saharo is a lightweight control-plane for single servers (VPS) and small fleets:
 desired state -> apply -> monitoring -> updates, without Kubernetes.
 
-This repo contains the CLI and its Python SDK (used by the CLI).
+This repo contains the active Rust CLI and Rust SDK:
+
+- `rust-cli/`
+- `rust-sdk/`
+
+Deprecated Python components were moved to:
+
+- `deprecated/python-cli/`
+- `deprecated/python-sdk/`
 
 ## Status
 
-The project is in active development and currently transitioning from a VPN-focused workflow
-to a generic "manage any services via desired-state YAML" workflow.
+The project is in active development and the Rust CLI is the only maintained CLI surface.
 
 ## License
 

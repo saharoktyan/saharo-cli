@@ -22,5 +22,14 @@ temp.txt
 /saharo.spec
 /cli/build
 /cli/dist/
+/build/
+build/
+/target/
+target/
+**/build/
+**/target/
 
 /cli/sys
+/deprecated/python-cli/sys
+/rust-sdk/target/
+/rust-cli/target/
